@@ -269,7 +269,7 @@ module Analyser =
 
         | Typedtree.Tpat_construct (_, cons_desc, _, _) when
             (* we give a name to the parameter only if it is unit *)
-            Path.same (Btype.cstr_type_path cons_desc) Predef.path_unit
+            Path.same (Data_types.cstr_res_type_path cons_desc) Predef.path_unit
           ->
             (* a () argument, it never has description *)
             Simple_name { sn_name = "()" ;
@@ -709,7 +709,7 @@ module Analyser =
             in
            (parameter :: params, k)
 
-      | (Parsetree.Pcl_apply (p_class_expr2, _), Tcl_apply (tt_class_expr2, exp_opt_optional_list)) ->
+      | (Parsetree.Pcl_apply (p_class_expr2, _), Tcl_apply (tt_class_expr2, arg_list)) ->
           let applied_name =
             (* we want an ident, or else the class applied will appear in the form object ... end,
                because if the class applied has no name, the code is kinda ugly, isn't it ? *)
@@ -724,13 +724,10 @@ module Analyser =
                 |  _ ->
                     Odoc_messages.object_end
           in
-          let param_exps = List.fold_left
-              (fun acc -> fun (_, exp_opt) ->
-                match exp_opt with
-                  None -> acc
-                | Some e -> acc @ [e])
-              []
-              exp_opt_optional_list
+          let param_exps = List.filter_map (function
+              | _, Omitted () -> None
+              | _, Arg e -> Some e)
+            arg_list
           in
           let param_types = List.map (fun e -> e.Typedtree.exp_type) param_exps in
           let params_code =
@@ -1846,7 +1843,7 @@ module Analyser =
        let (tree_structure, _) = typedtree in
        prepare_file source_file input_file;
        (* We create the t_module for this file. *)
-       let mod_name = Unit_info.modname_from_source source_file in
+       let mod_name = Unit_info.lax_modname_from_source source_file in
        let len, info_opt = Sig.preamble !file_name !file
            (fun x -> x.Parsetree.pstr_loc) parsetree in
       let info_opt = analyze_toplevel_alerts info_opt parsetree in

@@ -24,7 +24,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include "caml/config.h"
-#ifdef HAS_UNISTD
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 #ifdef __CYGWIN__
@@ -311,7 +311,7 @@ CAMLexport void caml_putword(struct channel *channel, uint32_t w)
   caml_putch(channel, w);
 }
 
-CAMLexport int caml_putblock(struct channel *channel, char *p, intnat len)
+CAMLexport int caml_putblock(struct channel *channel, const char *p, intnat len)
 {
   int n, free;
 
@@ -333,7 +333,7 @@ CAMLexport int caml_putblock(struct channel *channel, char *p, intnat len)
 }
 
 CAMLexport void caml_really_putblock(struct channel *channel,
-                                     char *p, intnat len)
+                                     const char *p, intnat len)
 {
   int written;
   while (len > 0) {
@@ -403,13 +403,12 @@ CAMLexport unsigned char caml_getch(struct channel *channel)
 
 CAMLexport uint32_t caml_getword(struct channel *channel)
 {
-  int i;
   uint32_t res;
 
   if (! caml_channel_binary_mode(channel))
     caml_failwith("input_binary_int: not a binary channel");
   res = 0;
-  for(i = 0; i < 4; i++) {
+  for (int i = 0; i < 4; i++) {
     res = (res << 8) + Getch(channel);
   }
   return res;
@@ -579,8 +578,8 @@ void caml_finalize_channel(value vchan)
 
 static int compare_channel(value vchan1, value vchan2)
 {
-  struct channel * chan1 = Channel(vchan1);
-  struct channel * chan2 = Channel(vchan2);
+  const struct channel * chan1 = Channel(vchan1);
+  const struct channel * chan2 = Channel(vchan2);
   return (chan1 == chan2) ? 0 : (chan1 < chan2) ? -1 : 1;
 }
 
@@ -661,12 +660,17 @@ CAMLprim value caml_ml_out_channels_list (value unit)
 {
   CAMLparam0 ();
   CAMLlocal3 (res, tail, chan);
-  struct channel * channel;
   struct channel_list *channel_list = NULL, *cl_tmp;
-  mlsize_t i, num_channels = 0;
+  mlsize_t num_channels = 0;
 
+  /* We cannot use [caml_plat_lock_non_blocking] inside
+     [caml_finalize_channel], so instead we must be careful here not
+     to trigger a STW while holding [caml_all_opened_channels_mutex].
+     This is why we allocate a temporary list with malloc. This is
+     unsatisfactory because the critical section inside
+     caml_ml_out_channels_list is not guaranteed to be short.*/
   caml_plat_lock_blocking(&caml_all_opened_channels_mutex);
-  for (channel = caml_all_opened_channels;
+  for (struct channel *channel = caml_all_opened_channels;
        channel != NULL;
        channel = channel->next) {
     CAMLassert(channel->flags & CHANNEL_FLAG_MANAGED_BY_GC);
@@ -687,7 +691,7 @@ CAMLprim value caml_ml_out_channels_list (value unit)
 
   res = Val_emptylist;
   cl_tmp = NULL;
-  for (i = 0; i < num_channels; i++) {
+  for (mlsize_t i = 0; i < num_channels; i++) {
     chan = caml_alloc_channel (channel_list->channel);
     tail = res;
     res = caml_alloc_2(Tag_cons, chan, tail);
@@ -845,7 +849,7 @@ CAMLprim value caml_ml_set_buffered(value vchannel, value mode)
 
 CAMLprim value caml_ml_is_buffered(value vchannel)
 {
-  struct channel * channel = Channel(vchannel);
+  const struct channel * channel = Channel(vchannel);
   return Val_bool( ! (channel->flags & CHANNEL_FLAG_UNBUFFERED));
 }
 

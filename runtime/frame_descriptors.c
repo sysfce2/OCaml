@@ -237,7 +237,7 @@ static void add_frame_descriptors(
 
 /* protected by STW sections */
 static caml_frame_descrs current_frame_descrs =
-  { 0, -1, NULL, NULL, NULL, PTHREAD_MUTEX_INITIALIZER };
+  { 0, -1, NULL, NULL, NULL, CAML_PLAT_MUTEX_INITIALIZER };
 
 static caml_frametable_list *cons(
   intnat *frametable, caml_frametable_list *tl)
@@ -294,13 +294,9 @@ static void stw_register_frametables(
     int participating_count,
     caml_domain_state** participating)
 {
-  barrier_status b = caml_global_barrier_begin ();
-
-  if (caml_global_barrier_is_final(b)) {
+  Caml_global_barrier_if_final(participating_count) {
     register_frametables_from_stw_single((caml_frametable_list*) frametables);
   }
-
-  caml_global_barrier_end(b);
 }
 
 void caml_register_frametables(void **table, int ntables) {
@@ -330,6 +326,7 @@ static void remove_frame_descriptors(
   void *frametable;
   caml_frametable_list ** previous;
 
+  /* cannot release the domain lock here (e.g. custom block finaliser) */
   caml_plat_lock_blocking(&table->mutex);
 
   previous = &table->frametables;

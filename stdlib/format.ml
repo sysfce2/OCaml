@@ -390,7 +390,7 @@ let format_pp_token state size = function
     end
 
   | Pp_if_newline ->
-    if state.pp_current_indent != state.pp_margin - state.pp_space_left
+    if state.pp_current_indent <> state.pp_margin - state.pp_space_left
     then pp_skip_token state
 
   | Pp_break { fits; breaks } ->
@@ -442,11 +442,15 @@ let rec advance_left state =
   | Some { size; token; length } ->
     let pending_count = state.pp_right_total - state.pp_left_total in
     if Size.is_known size || pending_count >= state.pp_space_left then begin
-      Queue.take state.pp_queue |> ignore; (* Not empty: we peek into it *)
-      let size = if Size.is_known size then Size.to_int size else pp_infinity in
-      format_pp_token state size token;
-      state.pp_left_total <- length + state.pp_left_total;
-      (advance_left [@tailcall]) state
+      match Queue.take_opt state.pp_queue with
+      | None -> invalid_arg "Format: Unsynchronized access to formatter"
+      | Some _ ->  (* Not empty: we peek into it *)
+        let size =
+          if Size.is_known size then Size.to_int size else pp_infinity
+        in
+        format_pp_token state size token;
+        state.pp_left_total <- length + state.pp_left_total;
+        (advance_left [@tailcall]) state
     end
 
 
@@ -1304,7 +1308,7 @@ let pp_print_text ppf s =
   let left = ref 0 in
   let right = ref 0 in
   let flush () =
-    pp_print_substring ppf s ~pos:!left ~len:(!right - !left);
+    pp_print_substring ~pos:!left ~len:(!right - !left) ppf s;
     incr right; left := !right;
   in
   while (!right <> len) do

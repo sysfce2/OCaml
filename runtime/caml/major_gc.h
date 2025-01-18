@@ -26,7 +26,7 @@ typedef enum {
 
 extern gc_phase_t caml_gc_phase;
 
-intnat caml_opportunistic_major_work_available (void);
+intnat caml_opportunistic_major_work_available (caml_domain_state*);
 void caml_opportunistic_major_collection_slice (intnat);
 /* auto-triggered slice from within the GC */
 #define AUTO_TRIGGERED_MAJOR_SLICE -1
@@ -48,20 +48,9 @@ int caml_mark_stack_is_empty(void);
 void caml_orphan_ephemerons(caml_domain_state*);
 void caml_orphan_finalisers(caml_domain_state*);
 
-/* Forces finalisation of all heap-allocated values,
-   disregarding both local and global roots.
-
-   Warning: finalisation is performed by means of forced sweeping, which may
-   result in pointers referencing nonexistent values; therefore the function
-   should only be used on runtime shutdown.
-*/
-void caml_finalise_heap (void);
-
 /* This variable is only written with the world stopped,
    so it need not be atomic */
 extern uintnat caml_major_cycles_completed;
-
-double caml_mean_space_overhead(void);
 
 #endif /* CAML_INTERNALS */
 

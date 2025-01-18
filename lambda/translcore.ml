@@ -20,6 +20,7 @@ open Misc
 open Asttypes
 open Primitive
 open Types
+open Data_types
 open Typedtree
 open Typeopt
 open Lambda
@@ -51,7 +52,7 @@ let prim_fresh_oo_id =
 let transl_extension_constructor ~scopes env path ext =
   let path =
     Printtyp.wrap_printing_env env ~error:true (fun () ->
-      Option.map (Printtyp.rewrite_double_underscore_paths env) path)
+      Option.map (Out_type.rewrite_double_underscore_paths env) path)
   in
   let name =
     match path, !Clflags.for_package with
@@ -173,6 +174,10 @@ let transl_ident loc env ty path desc =
       transl_value_path loc env path
   |  _ -> fatal_error "Translcore.transl_exp: bad Texp_ident"
 
+let is_omitted = function
+  | Arg _ -> false
+  | Omitted () -> true
+
 let rec transl_exp ~scopes e =
   transl_exp1 ~scopes ~in_new_scope:false e
 
@@ -212,10 +217,10 @@ and transl_exp0 ~in_new_scope ~scopes e =
   | Texp_apply({ exp_desc = Texp_ident(path, _, {val_kind = Val_prim p});
                 exp_type = prim_type } as funct, oargs)
     when List.length oargs >= p.prim_arity
-    && List.for_all (fun (_, arg) -> arg <> None) oargs ->
+    && List.for_all (fun (_, arg) -> not (is_omitted arg)) oargs ->
       let argl, extra_args = cut p.prim_arity oargs in
       let arg_exps =
-         List.map (function _, Some x -> x | _ -> assert false) argl
+         List.map (function _, Arg x -> x | _, Omitted () -> assert false) argl
       in
       let args = transl_list ~scopes arg_exps in
       let prim_exp = if extra_args = [] then Some e else None in
@@ -683,7 +688,7 @@ and transl_apply ~scopes
        non-optional parameter that follows it have been received.
   *)
   let rec build_apply lam args = function
-      (None, optional) :: l ->
+      (Omitted (), optional) :: l ->
         (* Out-of-order partial application; we will need to build a closure *)
         let defs = ref [] in
         let protect name lam =
@@ -713,7 +718,9 @@ and transl_apply ~scopes
         (* Evaluate the remaining arguments;
            if we already passed here this is a no-op. *)
         let l =
-          List.map (fun (arg, opt) -> Option.map (protect "arg") arg, opt) l
+          List.map
+            (fun (arg, opt) -> Typedtree.map_apply_arg (protect "arg") arg, opt)
+            l
         in
         let id_arg = Ident.create_local "param" in
         (* Process remaining arguments and build closure *)
@@ -733,13 +740,14 @@ and transl_apply ~scopes
         List.fold_right
           (fun (id, lam) body -> Llet(Strict, Pgenval, id, lam, body))
           !defs body
-    | (Some arg, optional) :: l ->
+    | (Arg arg, optional) :: l ->
         build_apply lam ((arg, optional) :: args) l
     | [] ->
         lapply lam (List.rev_map fst args)
   in
-  (build_apply lam [] (List.map (fun (l, x) ->
-                                   Option.map (transl_exp ~scopes) x,
+  let transl_arg arg = Typedtree.map_apply_arg (transl_exp ~scopes) arg in
+  (build_apply lam [] (List.map (fun (l, arg) ->
+                                   transl_arg arg,
                                    Btype.is_optional l)
                                 sargs)
      : Lambda.lambda)
@@ -1315,7 +1323,7 @@ let transl_let rec_flag pat_expr_list body =
 
 open Format_doc
 
-let report_error ppf = function
+let report_error_doc ppf = function
   | Free_super_var ->
       fprintf ppf
         "Ancestor names can only be used to select inherited methods"
@@ -1326,7 +1334,9 @@ let () =
   Location.register_error_of_exn
     (function
       | Error (loc, err) ->
-          Some (Location.error_of_printer ~loc report_error err)
+          Some (Location.error_of_printer ~loc report_error_doc err)
       | _ ->
         None
     )
+
+let report_error = Format_doc.compat report_error_doc

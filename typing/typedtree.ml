@@ -17,6 +17,7 @@
 
 open Asttypes
 open Types
+open Data_types
 
 module Uid = Shape.Uid
 
@@ -103,7 +104,7 @@ and expression_desc =
   | Texp_constant of constant
   | Texp_let of rec_flag * value_binding list * expression
   | Texp_function of function_param list * function_body
-  | Texp_apply of expression * (arg_label * expression option) list
+  | Texp_apply of expression * (arg_label * apply_arg) list
   | Texp_match of expression * computation case list * value case list * partial
   | Texp_try of expression * value case list * value case list
   | Texp_tuple of expression list
@@ -111,7 +112,7 @@ and expression_desc =
       Longident.t loc * constructor_description * expression list
   | Texp_variant of label * expression option
   | Texp_record of {
-      fields : ( Types.label_description * record_label_definition ) array;
+      fields : ( Data_types.label_description * record_label_definition ) array;
       representation : Types.record_representation;
       extended_expression : expression option;
     }
@@ -201,6 +202,12 @@ and binding_op =
     bop_loc : Location.t;
   }
 
+and ('a, 'b) arg_or_omitted =
+  | Arg of 'a
+  | Omitted of 'b
+
+and apply_arg = (expression, unit) arg_or_omitted
+
 (* Value expressions for the class language *)
 
 and class_expr =
@@ -218,7 +225,7 @@ and class_expr_desc =
   | Tcl_fun of
       arg_label * pattern * (Ident.t * expression) list
       * class_expr * partial
-  | Tcl_apply of class_expr * (arg_label * expression option) list
+  | Tcl_apply of class_expr * (arg_label * apply_arg) list
   | Tcl_let of rec_flag * value_binding list *
                   (Ident.t * expression) list * class_expr
   | Tcl_constraint of
@@ -894,37 +901,6 @@ let split_pattern pat =
   in
   split_pattern pat
 
-(* Expressions are considered nominal if they can be used as the subject of a
-   sentence or action. In practice, we consider that an expression is nominal
-   if they satisfy one of:
-   - Similar to an identifier: words separated by '.' or '#'.
-   - Do not contain spaces when printed.
-*)
-let nominal_exp_doc lid t =
-  let open Format_doc.Doc in
-  let longident l = Format_doc.doc_printer lid l.Location.txt in
-  let rec nominal_exp_doc doc exp =
-    match exp.exp_desc with
-    | _ when exp.exp_attributes <> [] -> None
-    | Texp_ident (_,l,_) ->
-        Some (longident l doc)
-    | Texp_instvar (_,_,s) ->
-        Some (string s.Location.txt doc)
-    | Texp_constant _ -> assert false
-    | Texp_variant (lbl, None) ->
-        Some (printf "`%s" lbl doc)
-    | Texp_construct (l, _, []) -> Some (longident l doc)
-    | Texp_field (parent, lbl, _) ->
-        Option.map
-          (printf ".%t" (longident lbl))
-          (nominal_exp_doc doc parent)
-    | Texp_send (parent, meth) ->
-        let name = match meth with
-          | Tmeth_name name -> name
-          | Tmeth_val id | Tmeth_ancestor (id,_) -> Ident.name id in
-        Option.map
-          (printf "#%s" name)
-          (nominal_exp_doc doc parent)
-    | _ -> None
-  in
-  nominal_exp_doc empty t
+let map_apply_arg f = function
+  | Arg arg -> Arg (f arg)
+  | Omitted _ as arg -> arg

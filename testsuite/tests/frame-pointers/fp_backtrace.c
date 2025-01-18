@@ -5,12 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "caml/mlvalues.h"
+#include <caml/mlvalues.h>
 
 #define ARR_SIZE(a)    (sizeof(a) / sizeof(*(a)))
 
 #if defined(__APPLE__)
-#define RE_FUNC_NAME "^[[:digit:]]+[[:space:]]+[[:alnum:]_\\.]+[[:space:]]+0x[[:xdigit:]]+[[:space:]]([[:alnum:]_\\.]+).*$"
+#define RE_FUNC_NAME "^[[:digit:]]+[[:space:]]+[[:alnum:]_\\.]+[[:space:]]+0x[[:xdigit:]]+[[:space:]]([[:alnum:]_\\$]+).*$"
 #else
 #define RE_FUNC_NAME  "^.*\\((.+)\\+0x[[:xdigit:]]+\\) \\[0x[[:xdigit:]]+\\]$"
 #endif
@@ -19,13 +19,13 @@
 
 typedef struct frame_info
 {
-  struct frame_info*  prev;     /* rbp */
-  void*               retaddr;  /* rip */
+  struct frame_info*  prev;     /* base pointer / frame pointer */
+  void*               retaddr;  /* instruction pointer / program counter */
 } frame_info;
 
 /*
  * A backtrace symbol looks like this on Linux:
- * ./path/to/binary(camlModule_fn_123+0xAABBCC) [0xAABBCCDDEE]
+ * ./path/to/binary(camlModule.fn_123+0xAABBCC) [0xAABBCCDDEE]
  *
  * or this on macOS:
  * 0   c_call.opt                          0x000000010e621079 camlC_call.entry + 57
@@ -108,10 +108,11 @@ static void print_symbol(const char* symbol, const regmatch_t* match)
 void fp_backtrace(value argv0)
 {
   const char* execname = String_val(argv0);
-  struct frame_info* next = NULL;
   const char* symbol = NULL;
 
-  for (struct frame_info* fi = __builtin_frame_address(0); fi; fi = next) {
+  for (struct frame_info *fi = __builtin_frame_address(0), *next = NULL;
+       fi;
+       fi = next) {
     next = fi->prev;
 
     /* Detect the simplest kind of infinite loop */

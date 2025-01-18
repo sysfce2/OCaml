@@ -158,8 +158,7 @@ Line 6, characters 23-57:
 6 | let () = print_endline (match PR6505b.x with `Bar s -> s);; (* fails *)
                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Warning 8 [partial-match]: this pattern-matching is not exhaustive.
-Here is an example of a case that is not matched:
-`Foo _
+  Here is an example of a case that is not matched: "`Foo _"
 
 Exception: Match_failure ("", 6, 23).
 |}]
@@ -419,7 +418,7 @@ Error: The type abbreviation "cycle" is cyclic:
          "cycle id" = "cycle"
 |}]
 
-(* Vanishing constraints may be discarded during the translation *)
+(* Vanishing constraints should be checked during the translation *)
 type 'a t = [`Foo]
 type 'a cstr constraint 'a = float
 [%%expect{|
@@ -430,8 +429,11 @@ type 'a cstr constraint 'a = float
 type s = int
 and r = [s cstr t | `Bar]
 [%%expect{|
-type s = int
-and r = [ `Bar | `Foo ]
+Line 1, characters 0-12:
+1 | type s = int
+    ^^^^^^^^^^^^
+Error: This type constructor expands to type "s" = "int"
+       but is used here with type "float"
 |}]
 
 
@@ -447,4 +449,16 @@ Error: Constraints are not satisfied in this type.
        Type "'a foo" should be an instance of "int"
        Type "foo" was considered abstract when checking constraints in this
        recursive type definition.
+|}]
+
+(* PR#13510 *)
+
+type 'a x = [ `X of 'e ] constraint 'a = 'e list
+
+type p = private [> a x]
+and a = int list
+[%%expect{|
+type 'a x = [ `X of 'e ] constraint 'a = 'e list
+type p = private [> a x ]
+and a = int list
 |}]

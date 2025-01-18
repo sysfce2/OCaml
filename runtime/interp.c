@@ -47,7 +47,7 @@
         Caml_state->trap_sp_off offset to the current trap frame
         extra_args number of extra arguments provided by the caller
 
-sp is a local copy of the global variable Caml_state->extern_sp. */
+sp is a local copy of the global variable Caml_state->current_stack->sp. */
 
 /* Instruction decoding */
 
@@ -156,7 +156,8 @@ Caml_inline void check_trap_barrier_for_effect
     if (parent_stack != NULL
         && parent_stack->id == domain_state->trap_barrier_block
         && parent_stack->sp + 2 - Stack_high (parent_stack)
-              /* Note: +2 is the same constant as in debugger.c:552 */
+              /* Note: +2 is the same constant as in the REQ_UP_FRAME
+                 case in caml_debugger() in debugger.c */
            == domain_state->trap_barrier_off){
       caml_debugger(TRAP_BARRIER, Val_unit);
     }
@@ -211,7 +212,7 @@ Caml_inline void check_trap_barrier_for_effect
 #define ACCU_REG asm("%r16")
 #endif
 #ifdef __mc68000__
-#define PC_REG asm("a5")
+#define PC_REG asm("a3")
 #define SP_REG asm("a4")
 #define ACCU_REG asm("d7")
 #endif
@@ -250,7 +251,8 @@ static value raise_unhandled_effect;
 
 CAMLno_tsan /* No need to TSan-instrument this (and pay a slowdown) function as
                TSan is not supported for bytecode. */
-value caml_interprete(code_t prog, asize_t prog_size)
+value caml_bytecode_interpreter(code_t prog, asize_t prog_size,
+                                value initial_env, intnat initial_extra_args)
 {
 #ifdef PC_REG
   register code_t pc PC_REG;
@@ -263,9 +265,9 @@ value caml_interprete(code_t prog, asize_t prog_size)
 #endif
 #if defined(THREADED_CODE) && defined(ARCH_SIXTYFOUR) && !defined(ARCH_CODE32)
 #ifdef JUMPTBL_BASE_REG
-  register char * jumptbl_base JUMPTBL_BASE_REG;
+  register const char * jumptbl_base JUMPTBL_BASE_REG;
 #else
-  register char * jumptbl_base;
+  register const char * jumptbl_base;
 #endif
 #endif
   value env;
@@ -310,7 +312,6 @@ value caml_interprete(code_t prog, asize_t prog_size)
     Closinfo_val(raise_unhandled_effect_closure) = Make_closinfo(0, 2);
     raise_unhandled_effect = raise_unhandled_effect_closure;
     caml_register_generational_global_root(&raise_unhandled_effect);
-    caml_global_data = Val_unit;
     caml_register_generational_global_root(&caml_global_data);
     caml_init_callbacks();
     return Val_unit;
@@ -344,8 +345,8 @@ value caml_interprete(code_t prog, asize_t prog_size)
 
   sp = domain_state->current_stack->sp;
   pc = prog;
-  extra_args = 0;
-  env = Atom(0);
+  extra_args = initial_extra_args;
+  env = initial_env;
   accu = Val_int(0);
 
 #ifdef THREADED_CODE
@@ -523,11 +524,10 @@ value caml_interprete(code_t prog, asize_t prog_size)
       int nargs = *pc++;
       int slotsize = *pc;
       value * newsp;
-      int i;
       /* Slide the nargs bottom words of the current frame to the top
          of the frame, and discard the remainder of the frame */
       newsp = sp + slotsize - nargs;
-      for (i = nargs - 1; i >= 0; i--) newsp[i] = sp[i];
+      for (int i = nargs - 1; i >= 0; i--) newsp[i] = sp[i];
       sp = newsp;
       pc = Code_val(accu);
       env = accu;
@@ -611,9 +611,8 @@ value caml_interprete(code_t prog, asize_t prog_size)
 
     Instruct(RESTART): {
       int num_args = Wosize_val(env) - 3;
-      int i;
       sp -= num_args;
-      for (i = 0; i < num_args; i++) sp[i] = Field(env, i + 3);
+      for (int i = 0; i < num_args; i++) sp[i] = Field(env, i + 3);
       env = Field(env, 2);
       extra_args += num_args;
       Next;
@@ -625,11 +624,11 @@ value caml_interprete(code_t prog, asize_t prog_size)
         extra_args -= required;
         Next;
       } else {
-        mlsize_t num_args, i;
+        mlsize_t num_args;
         num_args = 1 + extra_args; /* arg1 + extra args */
         Alloc_small(accu, num_args + 3, Closure_tag, Enter_gc);
         Field(accu, 2) = env;
-        for (i = 0; i < num_args; i++) Field(accu, i + 3) = sp[i];
+        for (mlsize_t i = 0; i < num_args; i++) Field(accu, i + 3) = sp[i];
         Code_val(accu) = pc - 3; /* Point to the preceding RESTART instr. */
         Closinfo_val(accu) = Make_closinfo(0, 2);
         sp += num_args;
@@ -639,18 +638,18 @@ value caml_interprete(code_t prog, asize_t prog_size)
 
     Instruct(CLOSURE): {
       int nvars = *pc++;
-      int i;
       if (nvars > 0) *--sp = accu;
       if (nvars <= Max_young_wosize - 2) {
         /* nvars + 2 <= Max_young_wosize, can allocate in minor heap */
         Alloc_small(accu, 2 + nvars, Closure_tag, Enter_gc);
-        for (i = 0; i < nvars; i++) Field(accu, i + 2) = sp[i];
+        for (int i = 0; i < nvars; i++) Field(accu, i + 2) = sp[i];
       } else {
         /* PR#6385: must allocate in major heap */
         /* caml_alloc_shr and caml_initialize never trigger a GC,
            so no need to Setup_for_gc */
         accu = caml_alloc_shr(2 + nvars, Closure_tag);
-        for (i = 0; i < nvars; i++) caml_initialize(&Field(accu, i + 2), sp[i]);
+        for (int i = 0; i < nvars; i++)
+          caml_initialize(&Field(accu, i + 2), sp[i]);
       }
       /* The code pointer is not in the heap, so no need to go through
          caml_initialize. */
@@ -666,20 +665,19 @@ value caml_interprete(code_t prog, asize_t prog_size)
       int nvars = *pc++;
       mlsize_t envofs = nfuncs * 3 - 1;
       mlsize_t blksize = envofs + nvars;
-      int i;
       volatile value * p;
       if (nvars > 0) *--sp = accu;
       if (blksize <= Max_young_wosize) {
         Alloc_small(accu, blksize, Closure_tag, Enter_gc);
         p = &Field(accu, envofs);
-        for (i = 0; i < nvars; i++, p++) *p = sp[i];
+        for (int i = 0; i < nvars; i++, p++) *p = sp[i];
       } else {
         /* PR#6385: must allocate in major heap */
         /* caml_alloc_shr and caml_initialize never trigger a GC,
            so no need to Setup_for_gc */
         accu = caml_alloc_shr(blksize, Closure_tag);
         p = &Field(accu, envofs);
-        for (i = 0; i < nvars; i++, p++) caml_initialize(p, sp[i]);
+        for (int i = 0; i < nvars; i++, p++) caml_initialize(p, sp[i]);
       }
       sp += nvars;
       /* The code pointers and infix headers are not in the heap,
@@ -688,7 +686,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
       p = &Field(accu, 0);
       *p++ = (value) (pc + pc[0]);
       *p++ = Make_closinfo(0, envofs);
-      for (i = 1; i < nfuncs; i++) {
+      for (int i = 1; i < nfuncs; i++) {
         *p++ = Make_header(i * 3, Infix_tag, 0); /* color irrelevant */
         *--sp = (value) p;
         *p++ = (value) (pc + pc[i]);
@@ -763,16 +761,16 @@ value caml_interprete(code_t prog, asize_t prog_size)
     Instruct(MAKEBLOCK): {
       mlsize_t wosize = *pc++;
       tag_t tag = *pc++;
-      mlsize_t i;
       value block;
       if (wosize <= Max_young_wosize) {
         Alloc_small(block, wosize, tag, Enter_gc);
         Field(block, 0) = accu;
-        for (i = 1; i < wosize; i++) Field(block, i) = *sp++;
+        for (mlsize_t i = 1; i < wosize; i++) Field(block, i) = *sp++;
       } else {
         block = caml_alloc_shr(wosize, tag);
         caml_initialize(&Field(block, 0), accu);
-        for (i = 1; i < wosize; i++) caml_initialize(&Field(block, i), *sp++);
+        for (mlsize_t i = 1; i < wosize; i++)
+          caml_initialize(&Field(block, i), *sp++);
       }
       accu = block;
       Next;
@@ -808,7 +806,6 @@ value caml_interprete(code_t prog, asize_t prog_size)
     }
     Instruct(MAKEFLOATBLOCK): {
       mlsize_t size = *pc++;
-      mlsize_t i;
       value block;
       if (size <= Max_young_wosize / Double_wosize) {
         Alloc_small(block, size * Double_wosize, Double_array_tag, Enter_gc);
@@ -816,7 +813,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
         block = caml_alloc_shr(size * Double_wosize, Double_array_tag);
       }
       Store_double_flat_field(block, 0, Double_val(accu));
-      for (i = 1; i < size; i++){
+      for (mlsize_t i = 1; i < size; i++){
         Store_double_flat_field(block, i, Double_val(*sp));
         ++ sp;
       }
@@ -1018,7 +1015,7 @@ value caml_interprete(code_t prog, asize_t prog_size)
     check_stacks:
       if (sp < Stack_threshold_ptr(domain_state->current_stack)) {
         domain_state->current_stack->sp = sp;
-        if (!caml_try_realloc_stack(Stack_threshold / sizeof(value))) {
+        if (!caml_try_realloc_stack(Stack_threshold_words)) {
           Setup_for_c_call; caml_raise_stack_overflow();
         }
         sp = domain_state->current_stack->sp;
@@ -1418,7 +1415,7 @@ do_resume: {
 #ifndef THREADED_CODE
     default:
 #ifdef _MSC_VER
-      __assume(0);
+      CAMLunreachable();
 #else
       caml_fatal_error("bad opcode (%"
                            ARCH_INTNAT_PRINTF_FORMAT "x)",

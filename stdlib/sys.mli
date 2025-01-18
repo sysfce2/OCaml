@@ -210,7 +210,8 @@ external runtime_parameters : unit -> string = "caml_runtime_parameters"
 
 external poll_actions : unit -> unit = "%poll"
 (** Run any pending runtime actions, such as minor collections, major
-    GC slices, signal handlers, finalizers, or memprof callbacks. *)
+    GC slices, signal handlers, finalizers, or memprof callbacks.
+    @since 5.3 *)
 
 
 (** {1 Signal handling} *)
@@ -411,7 +412,9 @@ external opaque_identity : 'a -> 'a = "%opaque"
 (** For the purposes of optimization, [opaque_identity] behaves like an
     unknown (and thus possibly side-effecting) function.
 
-    At runtime, [opaque_identity] disappears altogether.
+    At runtime, [opaque_identity] disappears altogether.  However, it does
+    prevent the argument from being garbage collected until the location
+    where the call would have occurred.
 
     A typical use of this function is to prevent pure computations from being
     optimized away in benchmarking loops.  For example:

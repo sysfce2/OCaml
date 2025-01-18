@@ -45,7 +45,7 @@ let emit_symbol s =
       if c = Compilenv.symbol_separator then
         output_char !output_channel c
       else
-        Printf.fprintf !output_channel "$%02x" (Char.code c)
+        Printf.fprintf !output_channel "$$%02x" (Char.code c)
   done
 
 let emit_string_literal s =
@@ -457,9 +457,18 @@ let reset () =
 let binary_backend_available = ref false
 let create_asm_file = ref true
 
-let report_error ppf = function
+let report_error_doc ppf = function
   | Stack_frame_too_large n ->
       Format_doc.fprintf ppf "stack frame too large (%d bytes)" n
+
+let () =
+  Location.register_error_of_exn
+    (function
+      | Error err -> Some (Location.error_of_printer_file report_error_doc err)
+      | _ -> None
+    )
+
+let report_error = Format_doc.compat report_error_doc
 
 let mk_env f : Emitenv.per_function_env =
   {

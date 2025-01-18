@@ -40,15 +40,12 @@
 /* No longer used in the codebase, but kept because it was exported */
 #define INT64_LITERAL(s) s ## LL
 
-#if defined(_MSC_VER) && !defined(__cplusplus)
-#define Caml_inline static __inline
-#else
 #define Caml_inline static inline
-#endif
 
 #ifndef CAML_CONFIG_H_NO_TYPEDEFS
 
 #include <stddef.h>
+#include <limits.h>
 
 #if defined(HAS_LOCALE_H) || defined(HAS_XLOCALE_H)
 #define HAS_LOCALE
@@ -69,7 +66,7 @@
   #define __USE_MINGW_ANSI_STDIO 0
 #endif
 
-#if defined(__MINGW32__) || (defined(_MSC_VER) && _MSC_VER < 1800)
+#if defined(__MINGW32__)
 #define ARCH_SIZET_PRINTF_FORMAT "I"
 #else
 #define ARCH_SIZET_PRINTF_FORMAT "z"
@@ -96,7 +93,7 @@
 #endif
 #endif
 
-#if defined(__MINGW32__) && !__USE_MINGW_ANSI_STDIO
+#if defined(__MINGW32__) && !__USE_MINGW_ANSI_STDIO && !defined(_UCRT)
   #define ARCH_INT64_TYPE long long
   #define ARCH_UINT64_TYPE unsigned long long
   #define ARCH_INT64_PRINTF_FORMAT "I64"
@@ -137,7 +134,10 @@ typedef uint64_t uintnat;
 #error "No integer type available to represent pointers"
 #endif
 
-#define UINTNAT_MAX ((uintnat)-1)
+#define CAML_INTNAT_MIN INTPTR_MIN
+#define CAML_INTNAT_MAX INTPTR_MAX
+#define CAML_UINTNAT_MIN UINTPTR_MIN
+#define CAML_UINTNAT_MAX UINTPTR_MAX
 
 #endif /* CAML_CONFIG_H_NO_TYPEDEFS */
 
@@ -157,10 +157,9 @@ typedef uint64_t uintnat;
 #endif
 
 
-/* We use threaded code interpretation if the compiler provides labels
-   as first-class values (GCC 2.x). */
-
-#if defined(__GNUC__) && __GNUC__ >= 2 && !defined(DEBUG)
+/* We use threaded code interpretation if the C compiler supports the labels as
+   values extension. */
+#if defined(HAVE_LABELS_AS_VALUES) && !defined(DEBUG)
 #define THREADED_CODE
 #endif
 

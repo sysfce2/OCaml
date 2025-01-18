@@ -37,28 +37,9 @@ let rec print_ident ppf =
 
 let out_ident = ref print_ident
 
-(* Check a character matches the [identchar_latin1] class from the lexer *)
-let is_ident_char c =
-  match c with
-  | 'A'..'Z' | 'a'..'z' | '_' | '\192'..'\214' | '\216'..'\246'
-  | '\248'..'\255' | '\'' | '0'..'9' -> true
-  | _ -> false
-
-let all_ident_chars s =
-  let rec loop s len i =
-    if i < len then begin
-      if is_ident_char s.[i] then loop s len (i+1)
-      else false
-    end else begin
-      true
-    end
-  in
-  let len = String.length s in
-  loop s len 0
-
 let parenthesized_ident name =
   (List.mem name ["or"; "mod"; "land"; "lor"; "lxor"; "lsl"; "lsr"; "asr"])
-  || not (all_ident_chars name)
+  || not (Misc.Utf8_lexeme.is_valid_identifier name)
 
 let value_ident ppf name =
   if parenthesized_ident name then
@@ -162,6 +143,9 @@ let print_constr ppf name =
     (* despite being keywords, these are constructor names
        and should not be escaped *)
     fprintf ppf "%s" c
+  | Oide_dot (id, ("true"|"false" as s)) ->
+      (* Similarly, M.true is invalid *)
+      fprintf ppf "%a.(%s)" print_ident id s
   | _ -> print_ident ppf name
 
 let print_out_value ppf tree =
@@ -227,6 +211,10 @@ let print_out_value ppf tree =
     | Oval_printer f -> f ppf
     | Oval_tuple tree_list ->
         fprintf ppf "@[<1>(%a)@]" (print_tree_list print_tree_1 ",") tree_list
+    | Oval_floatarray arr ->
+       fprintf ppf "@[<2>[|%a|]@]"
+         (pp_print_seq ~pp_sep:semicolon pp_print_float)
+         (Float.Array.to_seq arr)
     | tree -> fprintf ppf "@[<1>(%a)@]" (cautious print_tree_1) tree
   and print_fields first ppf =
     function
@@ -404,10 +392,13 @@ and print_typargs ppf =
       pp_print_char ppf ')';
       pp_close_box ppf ();
       pp_print_space ppf ()
-and print_out_label ppf (name, mut, arg) =
-  fprintf ppf "@[<2>%s%a :@ %a@];" (if mut then "mutable " else "")
-    print_lident name
-    print_out_type arg
+and print_out_label ppf {olab_name; olab_mut; olab_type} =
+  fprintf ppf "@[<2>%s%a :@ %a@];"
+    (match olab_mut with
+     | Mutable -> "mutable "
+     | Immutable -> "")
+    print_lident olab_name
+    print_out_type olab_type
 
 let out_label = ref print_out_label
 
@@ -555,7 +546,7 @@ and print_out_functor_parameters ppf l =
           print_args l
     | _ :: _ as non_anonymous_functor ->
         let args, anons = split_anon_functor_arguments non_anonymous_functor in
-        fprintf ppf "@[<2>functor@ %a@]@ ->@ %a"
+        fprintf ppf "@[%a@]@ ->@ %a"
           (pp_print_list ~pp_sep:pp_print_space print_nonanon_arg) args
           print_args anons
   in

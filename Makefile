@@ -119,7 +119,9 @@ typing_SOURCES = \
   typing/outcometree.mli \
   typing/shape.mli typing/shape.ml \
   typing/types.mli typing/types.ml \
+  typing/data_types.mli typing/data_types.ml \
   typing/rawprinttyp.mli typing/rawprinttyp.ml \
+  typing/gprinttyp.mli typing/gprinttyp.ml \
   typing/btype.mli typing/btype.ml \
   typing/oprint.mli typing/oprint.ml \
   typing/subst.mli typing/subst.ml \
@@ -133,7 +135,9 @@ typing_SOURCES = \
   typing/signature_group.mli typing/signature_group.ml \
   typing/printtyped.mli typing/printtyped.ml \
   typing/ctype.mli typing/ctype.ml \
+  typing/out_type.mli typing/out_type.ml \
   typing/printtyp.mli typing/printtyp.ml \
+  typing/errortrace_report.mli typing/errortrace_report.ml \
   typing/includeclass.mli typing/includeclass.ml \
   typing/mtype.mli typing/mtype.ml \
   typing/envaux.mli typing/envaux.ml \
@@ -509,7 +513,10 @@ ocamllex_PROGRAMS = $(addprefix lex/,ocamllex ocamllex.opt)
 ocamlyacc_PROGRAM = yacc/ocamlyacc
 
 # Tools to be compiled to native and bytecode, then installed
-TOOLS_TO_INSTALL_NAT = ocamldep ocamlobjinfo
+TOOLS_TO_INSTALL_NAT = ocamldep
+ifeq "$(build_ocamlobjinfo)" "true"
+  TOOLS_TO_INSTALL_NAT += ocamlobjinfo
+endif
 
 # Tools to be compiled to bytecode only, then installed
 TOOLS_TO_INSTALL_BYT = \
@@ -523,7 +530,8 @@ endif
 # the configuration is not available during clean so we don't
 # know whether they have been configured / built or not
 clean::
-	rm -f $(addprefix tools/ocamlopt,p p.opt p.exe p.opt.exe)
+	rm -f $(addprefix tools/ocamlopt,p p.opt p.exe p.opt.exe) \
+	  tools/ocamlobjinfo $(addprefix tools/ocamlobjinfo,.opt .exe .opt.exe)
 
 TOOLS_NAT = $(TOOLS_TO_INSTALL_NAT)
 TOOLS_BYT = $(TOOLS_TO_INSTALL_BYT) dumpobj primreq stripdebug cmpbyt
@@ -565,7 +573,7 @@ $(foreach PROGRAM, $(OCAML_BYTECODE_PROGRAMS),\
 # OCaml programs that are compiled only in native code
 
 OCAML_NATIVE_PROGRAMS = \
-  ocamlnat tools/lintapidiff.opt $(OPTIONAL_NATIVE_TOOLS)
+  ocamlnat tools/lintapidiff.opt tools/sync_dynlink.opt $(OPTIONAL_NATIVE_TOOLS)
 
 $(foreach PROGRAM, $(OCAML_NATIVE_PROGRAMS),\
   $(eval $(call OCAML_NATIVE_PROGRAM,$(PROGRAM))))
@@ -708,9 +716,9 @@ compare:
 # The core system has to be rebuilt after bootstrap anyway, so strip ocamlc
 # and ocamllex, which means the artefacts should be identical.
 	mv ocamlc$(EXE) ocamlc.tmp
-	$(OCAMLRUN) tools/stripdebug -all ocamlc.tmp ocamlc$(EXE)
+	$(OCAMLRUN) tools/stripdebug$(EXE) -all ocamlc.tmp ocamlc$(EXE)
 	mv lex/ocamllex$(EXE) ocamllex.tmp
-	$(OCAMLRUN) tools/stripdebug -all ocamllex.tmp lex/ocamllex$(EXE)
+	$(OCAMLRUN) tools/stripdebug$(EXE) -all ocamllex.tmp lex/ocamllex$(EXE)
 	rm -f ocamllex.tmp ocamlc.tmp
 	@if $(CMPCMD) boot/ocamlc ocamlc$(EXE) \
          && $(CMPCMD) boot/ocamllex lex/ocamllex$(EXE); \
@@ -738,7 +746,7 @@ promote-cross: promote-common
 # Promote the newly compiled system to the rank of bootstrap compiler
 # (Runs on the new runtime, produces code for the new runtime)
 .PHONY: promote
-promote: PROMOTE = $(OCAMLRUN) tools/stripdebug -all
+promote: PROMOTE = $(OCAMLRUN) tools/stripdebug$(EXE) -all
 promote: promote-common
 	rm -f boot/ocamlrun$(EXE)
 	cp runtime/ocamlrun$(EXE) boot/ocamlrun$(EXE)
@@ -1023,10 +1031,69 @@ natruntop:
 	$(MAKE) ocamlnat
 	@$(RUN_OCAMLNAT)
 
-# Native dynlink
+# The dynlink library
 
-otherlibs/dynlink/dynlink.cmxa: otherlibs/dynlink/native/dynlink.ml
-	$(MAKE) -C otherlibs/dynlink allopt
+dynlink_SOURCES = $(addprefix otherlibs/dynlink/,\
+  dynlink_config.mli dynlink_config.ml \
+  dynlink_types.mli dynlink_types.ml \
+  dynlink_platform_intf.mli dynlink_platform_intf.ml \
+  dynlink_common.mli dynlink_common.ml \
+  byte/dynlink_symtable.mli byte/dynlink_symtable.ml \
+  byte/dynlink.mli byte/dynlink.ml \
+  native/dynlink.mli native/dynlink.ml)
+
+dynlink_LIBRARIES =
+
+otherlibs/dynlink/%: CAMLC = $(BEST_OCAMLC) $(STDLIBFLAGS)
+otherlibs/dynlink/%: CAMLOPT = $(BEST_OCAMLOPT) $(STDLIBFLAGS)
+
+
+otherlibs/dynlink/%/dynlink.cmi: \
+  otherlibs/dynlink/dynlink.cmi otherlibs/dynlink/dynlink.mli
+	cp $^ otherlibs/dynlink/$*/
+
+.PHONY: dynlink-all
+dynlink-all: otherlibs/dynlink/dynlink.cma
+
+.PHONY: dynlink-allopt
+dynlink-allopt: otherlibs/dynlink/dynlink.cmxa
+
+otherlibs/dynlink/dynlink.cma: VPATH += otherlibs/dynlink/byte
+otherlibs/dynlink/dynlink.cmxa: VPATH += otherlibs/dynlink/native
+
+ifeq "$(FLAMBDA)" "true"
+otherlibs/dynlink/%: OC_NATIVE_COMPFLAGS += -O3
+endif
+
+# dynlink.cmx needs to be available in the search path (since
+# it is not compiled with -opaque), and we prefer to make the file
+# available in a directory that is already searched rather than have
+# to add otherlibs/dynlink/native to the search path as well
+
+otherlibs/dynlink/dynlink.cmx : otherlibs/dynlink/native/dynlink.cmx
+	cd otherlibs/dynlink; $(LN) native/dynlink.cmx .
+
+DYNLINK_DEPEND_DUMMY_FILES = \
+  otherlibs/dynlink/dynlink.ml \
+  otherlibs/dynlink/byte/dynlink.mli \
+  otherlibs/dynlink/native/dynlink.mli
+
+beforedepend::
+	@touch $(DYNLINK_DEPEND_DUMMY_FILES)
+
+otherlibs/dynlink.depend: beforedepend
+	@$(OCAMLDEP) $(OC_OCAMLDEPFLAGS) -I otherlibs/dynlink $(INCLUDES) \
+	  $(OCAMLDEPFLAGS) \
+	  -I otherlibs/dynlink/byte \
+	  -bytecode otherlibs/dynlink/*.mli otherlibs/dynlink/dynlink_*.ml \
+	  otherlibs/dynlink/byte/*.mli otherlibs/dynlink/byte/*.ml \
+	  > $@
+	@$(OCAMLDEP) $(OC_OCAMLDEPFLAGS) -I otherlibs/dynlink $(INCLUDES) \
+	  $(OCAMLDEPFLAGS) \
+	  -I otherlibs/dynlink/native \
+	  -native otherlibs/dynlink/dynlink_*.ml \
+	  otherlibs/dynlink/native/dynlink.ml \
+	  >> $@
 
 # Cleanup the lexer
 
@@ -1049,28 +1116,28 @@ beforedepend:: lambda/runtimedef.ml
 # Choose the right machine-dependent files
 
 asmcomp/arch.mli: asmcomp/$(ARCH)/arch.mli
-	cd asmcomp; $(LN) $(ARCH)/arch.mli .
+	@cd asmcomp; $(LN) $(ARCH)/arch.mli .
 
 asmcomp/arch.ml: asmcomp/$(ARCH)/arch.ml
-	cd asmcomp; $(LN) $(ARCH)/arch.ml .
+	@cd asmcomp; $(LN) $(ARCH)/arch.ml .
 
 asmcomp/proc.ml: asmcomp/$(ARCH)/proc.ml
-	cd asmcomp; $(LN) $(ARCH)/proc.ml .
+	@cd asmcomp; $(LN) $(ARCH)/proc.ml .
 
 asmcomp/selection.ml: asmcomp/$(ARCH)/selection.ml
-	cd asmcomp; $(LN) $(ARCH)/selection.ml .
+	@cd asmcomp; $(LN) $(ARCH)/selection.ml .
 
 asmcomp/CSE.ml: asmcomp/$(ARCH)/CSE.ml
-	cd asmcomp; $(LN) $(ARCH)/CSE.ml .
+	@cd asmcomp; $(LN) $(ARCH)/CSE.ml .
 
 asmcomp/reload.ml: asmcomp/$(ARCH)/reload.ml
-	cd asmcomp; $(LN) $(ARCH)/reload.ml .
+	@cd asmcomp; $(LN) $(ARCH)/reload.ml .
 
 asmcomp/scheduling.ml: asmcomp/$(ARCH)/scheduling.ml
-	cd asmcomp; $(LN) $(ARCH)/scheduling.ml .
+	@cd asmcomp; $(LN) $(ARCH)/scheduling.ml .
 
 asmcomp/stackframe.ml: asmcomp/$(ARCH)/stackframe.ml
-	cd asmcomp; $(LN) $(ARCH)/stackframe.ml .
+	@cd asmcomp; $(LN) $(ARCH)/stackframe.ml .
 
 # Preprocess the code emitters
 cvt_emit = tools/cvt_emit$(EXE)
@@ -1128,6 +1195,7 @@ runtime_COMMON_C_SOURCES = \
   domain \
   dynlink \
   extern \
+  fail \
   fiber \
   finalise \
   floats \
@@ -1162,7 +1230,6 @@ runtime_COMMON_C_SOURCES = \
   str \
   sync \
   sys \
-  $(TSAN_NATIVE_RUNTIME_C_SOURCES) \
   $(UNIX_OR_WIN32) \
   weak
 
@@ -1178,6 +1245,7 @@ runtime_BYTECODE_C_SOURCES = \
   $(runtime_BYTECODE_ONLY_C_SOURCES:%=runtime/%.c)
 
 runtime_NATIVE_ONLY_C_SOURCES = \
+  $(TSAN_NATIVE_RUNTIME_C_SOURCES) \
   backtrace_nat \
   clambda_checks \
   dynlink_nat \
@@ -1267,8 +1335,9 @@ libcomprmarsh_OBJECTS = runtime/zstd.npic.$(O)
 ## General (non target-specific) assembler and compiler flags
 
 runtime_CPPFLAGS = -DCAMLDLLIMPORT= -DIN_CAML_RUNTIME
-ocamlrund_CPPFLAGS = -DDEBUG
-ocamlruni_CPPFLAGS = -DCAML_INSTR
+ocamlrun_CPPFLAGS = $(runtime_CPPFLAGS)
+ocamlrund_CPPFLAGS = $(runtime_CPPFLAGS) -DDEBUG
+ocamlruni_CPPFLAGS = $(runtime_CPPFLAGS) -DCAML_INSTR
 
 ## Runtime targets
 
@@ -1304,33 +1373,28 @@ runtime/caml/opnames.h : runtime/caml/instruct.h
 	$(V_GEN)tr -d '\r' < $< | \
 	sed -e '/\/\*/d' \
 	    -e '/^#/d' \
-	    -e 's/enum /static char * names_of_/' \
+	    -e 's/enum /static char const * const names_of_/' \
 	    -e 's/{$$/[] = {/' \
 	    -e 's/\([[:upper:]][[:upper:]_0-9]*\)/"\1"/g' > $@
 
-# runtime/caml/jumptbl.h is required only if you have GCC 2.0 or later
+# runtime/caml/jumptbl.h is required only if the C compiler supports
+# the labels as values extension.
 runtime/caml/jumptbl.h : runtime/caml/instruct.h
 	$(V_GEN)tr -d '\r' < $< | \
 	sed -n -e '/^  /s/ \([A-Z]\)/ \&\&lbl_\1/gp' \
 	       -e '/^}/q' > $@
 
-# These are provided as a temporary shim to allow cross-compilation systems
-# to supply a host C compiler and different flags and a linking macro.
-SAK_CC ?= $(CC)
-SAK_CFLAGS ?= $(OC_CFLAGS) $(CFLAGS) $(OC_CPPFLAGS) $(CPPFLAGS)
-SAK_LINK ?= $(MKEXE_VIA_CC)
-
 $(SAK): runtime/sak.$(O)
 	$(V_MKEXE)$(call SAK_LINK,$@,$^)
 
 runtime/sak.$(O): runtime/sak.c runtime/caml/misc.h runtime/caml/config.h
-	$(V_CC)$(SAK_CC) -c $(SAK_CFLAGS) $(OUTPUTOBJ)$@ $<
+	$(V_CC)$(SAK_CC) $(SAK_CFLAGS) $(OUTPUTOBJ)$@ -c $<
 
-C_LITERAL = $(shell $(SAK) encode-C-literal '$(1)')
+C_LITERAL = $(shell $(SAK) $(ENCODE_C_LITERAL) '$(1)')
 
 runtime/build_config.h: $(ROOTDIR)/Makefile.config $(SAK)
 	$(V_GEN)echo '/* This file is generated from $(ROOTDIR)/Makefile.config */' > $@ && \
-	echo '#define OCAML_STDLIB_DIR $(call C_LITERAL,$(LIBDIR))' >> $@ && \
+	echo '#define OCAML_STDLIB_DIR $(call C_LITERAL,$(TARGET_LIBDIR))' >> $@ && \
 	echo '#define HOST "$(HOST)"' >> $@
 
 ## Runtime libraries and programs
@@ -1385,34 +1449,45 @@ runtime/libcomprmarsh.$(A): $(libcomprmarsh_OBJECTS)
 
 ## Runtime target-specific preprocessor and compiler flags
 
-runtime/%.$(O): OC_CPPFLAGS += $(runtime_CPPFLAGS)
-$(DEPDIR)/runtime/%.$(D): OC_CPPFLAGS += $(runtime_CPPFLAGS)
+runtime/%.b.$(O): OC_CFLAGS = $(OC_BYTECODE_CFLAGS)
+runtime/%.b.$(O): OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
+$(DEPDIR)/runtime/%.b.$(D): \
+  OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
 
-runtime/%.bd.$(O): OC_CPPFLAGS += $(ocamlrund_CPPFLAGS)
-$(DEPDIR)/runtime/%.bd.$(D): OC_CPPFLAGS += $(ocamlrund_CPPFLAGS)
+runtime/%.bd.$(O): OC_CFLAGS = $(OC_BYTECODE_CFLAGS)
+runtime/%.bd.$(O): OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlrund_CPPFLAGS)
+$(DEPDIR)/runtime/%.bd.$(D): \
+  OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlrund_CPPFLAGS)
 
-runtime/%.bi.$(O): OC_CPPFLAGS += $(ocamlruni_CPPFLAGS)
-$(DEPDIR)/runtime/%.bi.$(D): OC_CPPFLAGS += $(ocamlruni_CPPFLAGS)
+runtime/%.bi.$(O): OC_CFLAGS = $(OC_BYTECODE_CFLAGS)
+runtime/%.bi.$(O): OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlruni_CPPFLAGS)
+$(DEPDIR)/runtime/%.bi.$(D): \
+  OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlruni_CPPFLAGS)
 
-runtime/%.bpic.$(O): OC_CFLAGS += $(SHAREDLIB_CFLAGS)
+runtime/%.bpic.$(O): OC_CFLAGS = $(OC_BYTECODE_CFLAGS) $(SHAREDLIB_CFLAGS)
+runtime/%.bpic.$(O): OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
+$(DEPDIR)/runtime/%.bpic.$(D): \
+  OC_CPPFLAGS = $(OC_BYTECODE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
 
-runtime/%.n.$(O): OC_CFLAGS += $(OC_NATIVE_CFLAGS)
-runtime/%.n.$(O): OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS)
-$(DEPDIR)/runtime/%.n.$(D): OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS)
+runtime/%.n.$(O): OC_CFLAGS = $(OC_NATIVE_CFLAGS)
+runtime/%.n.$(O): OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
+$(DEPDIR)/runtime/%.n.$(D): \
+  OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
 
-runtime/%.nd.$(O): OC_CFLAGS += $(OC_NATIVE_CFLAGS)
-runtime/%.nd.$(O): OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS) $(ocamlrund_CPPFLAGS)
+runtime/%.nd.$(O): OC_CFLAGS = $(OC_NATIVE_CFLAGS)
+runtime/%.nd.$(O): OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlrund_CPPFLAGS)
 $(DEPDIR)/runtime/%.nd.$(D): \
-  OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS) $(ocamlrund_CPPFLAGS)
+  OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlrund_CPPFLAGS)
 
-runtime/%.ni.$(O): OC_CFLAGS += $(OC_NATIVE_CFLAGS)
-runtime/%.ni.$(O): OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS) $(ocamlruni_CPPFLAGS)
+runtime/%.ni.$(O): OC_CFLAGS = $(OC_NATIVE_CFLAGS)
+runtime/%.ni.$(O): OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlruni_CPPFLAGS)
 $(DEPDIR)/runtime/%.ni.$(D): \
-  OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS) $(ocamlruni_CPPFLAGS)
+  OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlruni_CPPFLAGS)
 
-runtime/%.npic.$(O): OC_CFLAGS += $(OC_NATIVE_CFLAGS) $(SHAREDLIB_CFLAGS)
-runtime/%.npic.$(O): OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS)
-$(DEPDIR)/runtime/%.npic.$(D): OC_CPPFLAGS += $(OC_NATIVE_CPPFLAGS)
+runtime/%.npic.$(O): OC_CFLAGS = $(OC_NATIVE_CFLAGS) $(SHAREDLIB_CFLAGS)
+runtime/%.npic.$(O): OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
+$(DEPDIR)/runtime/%.npic.$(D): \
+  OC_CPPFLAGS = $(OC_NATIVE_CPPFLAGS) $(ocamlrun_CPPFLAGS)
 
 ## Compilation of runtime C files
 
@@ -1439,15 +1514,15 @@ $(1).$(O): $(2).c \
   $(runtime_CONFIGURED_HEADERS) $(runtime_BUILT_HEADERS) \
   $(RUNTIME_HEADERS)
 endif # ifeq "$(COMPUTE_DEPS)" "true"
-	$$(V_CC)$$(CC) -c $$(OC_CFLAGS) $$(CFLAGS) $$(OC_CPPFLAGS) $$(CPPFLAGS) \
-	  $$(OUTPUTOBJ)$$@ $$<
+	$$(V_CC)$$(CC) $$(OC_CFLAGS) $$(CFLAGS) $$(OC_CPPFLAGS) $$(CPPFLAGS) \
+	  $$(OUTPUTOBJ)$$@ -c $$<
 endef
 
 runtime/winpthreads/%.$(O): $(WINPTHREADS_SOURCE_DIR)/src/%.c \
                             $(wildcard $(WINPTHREADS_SOURCE_DIR)/include/*.h) \
                               | runtime/winpthreads
-	$(V_CC)$(CC) -c $(OC_CFLAGS) $(CFLAGS) $(OC_CPPFLAGS) $(CPPFLAGS) \
-	  $(OUTPUTOBJ)$@ $<
+	$(V_CC)$(CC) $(OC_CFLAGS) $(CFLAGS) $(OC_CPPFLAGS) $(CPPFLAGS) \
+	  $(OUTPUTOBJ)$@ -c $<
 
 runtime/winpthreads:
 	$(MKDIR) $@
@@ -1557,7 +1632,13 @@ clean::
 
 # Dependencies
 
-subdirs = stdlib $(addprefix otherlibs/, $(ALL_OTHERLIBS))
+# The following definition duplicates the otherlibs/ prefix but this
+# will go away with the merge of the sub makefiles
+subdirs = stdlib \
+  otherlibs/str \
+  otherlibs/systhreads \
+  otherlibs/unix \
+  otherlibs/runtime_events
 
 .PHONY: alldepend
 alldepend: depend
@@ -1772,7 +1853,6 @@ OCAMLDOC_LIBCMIS=$(OCAMLDOC_LIBMLIS:.mli=.cmi)
 OCAMLDOC_LIBCMTS=$(OCAMLDOC_LIBMLIS:.mli=.cmt) $(OCAMLDOC_LIBMLIS:.mli=.cmti)
 
 ocamldoc/%: CAMLC = $(BEST_OCAMLC) $(STDLIBFLAGS)
-
 ocamldoc/%: CAMLOPT = $(BEST_OCAMLOPT) $(STDLIBFLAGS)
 
 .PHONY: ocamldoc
@@ -1837,7 +1917,10 @@ ocamltest_ocaml_PLUGIN = \
   ocaml_compilers.mli ocaml_compilers.ml \
   ocaml_toplevels.mli ocaml_toplevels.ml \
   ocaml_actions.mli ocaml_actions.ml \
-  ocaml_tests.mli ocaml_tests.ml
+  ocaml_tests.mli ocaml_tests.ml \
+  debugger_flags.mli debugger_flags.ml \
+  debugger_variables.mli debugger_variables.ml \
+  debugger_actions.mli debugger_actions.ml \
 
 ocamltest_SOURCES = $(addprefix ocamltest/, \
   $(ocamltest_CORE) $(ocamltest_ocaml_PLUGIN) \
@@ -1964,6 +2047,8 @@ manpages:
 	$(MAKE) -C api_docgen man
 
 partialclean::
+	rm -f ocamldoc/ocamldoc ocamldoc/ocamldoc.exe
+	rm -f ocamldoc/ocamldoc.opt ocamldoc/ocamldoc.opt.exe
 	rm -f ocamldoc/\#*\#
 	rm -f ocamldoc/*.cm[aiotx] ocamldoc/*.cmxa ocamldoc/*.cmti \
 	  ocamldoc/*.a ocamldoc/*.lib ocamldoc/*.o ocamldoc/*.obj
@@ -1987,21 +2072,31 @@ ocamltest/ocamltest.html: ocamltest/ocamltest.org
 # The extra libraries
 
 .PHONY: otherlibraries
-otherlibraries: ocamltools
+otherlibraries: ocamltools dynlink-all
 	$(MAKE) -C otherlibs all
 
 .PHONY: otherlibrariesopt
-otherlibrariesopt:
+otherlibrariesopt: dynlink-allopt
 	$(MAKE) -C otherlibs allopt
 
 otherlibs/unix/unix.cmxa: otherlibrariesopt
-otherlibs/dynlink/dynlink.cmxa: otherlibrariesopt
 otherlibs/str/str.cmxa: otherlibrariesopt
 
 partialclean::
+	rm -f otherlibs/dynlink/*.cm[ioaxt] otherlibs/dynlink/*.cmti \
+	  otherlibs/dynlink/*.cmxa otherlibs/dynlink/byte/*.cm[iot] \
+	  otherlibs/dynlink/byte/*.cmti otherlibs/dynlink/native/*.cm[ixt] \
+	  otherlibs/dynlink/native/*.cmti otherlibs/dynlink/native/*.o \
+	  otherlibs/dynlink/native/*.obj
 	$(MAKE) -C otherlibs partialclean
 
 clean::
+	rm -f otherlibs/dynlink/*.a otherlibs/dynlink/*.lib \
+	  otherlibs/dynlink/*.o otherlibs/dynlink/*.obj \
+	  otherlibs/dynlink/*.so otherlibs/dynlink/*.dll \
+	  otherlibs/dynlink/byte/dynlink.mli \
+	  otherlibs/dynlink/native/dynlink.mli \
+
 	$(MAKE) -C otherlibs clean
 
 # The replay debugger
@@ -2015,7 +2110,6 @@ ocamldebug_LIBRARIES = compilerlibs/ocamlcommon \
 # possible to get rid of these dependencies
 
 otherlibs/unix/unix.cma: otherlibraries
-otherlibs/dynlink/dynlink.cma: otherlibraries
 otherlibs/str/str.cma: otherlibraries
 
 debugger/%: VPATH += otherlibs/unix otherlibs/dynlink
@@ -2070,7 +2164,7 @@ ocamldebug_SOURCES = \
     ocamldebug.ml \
     ocamldebug_entry.mli ocamldebug_entry.ml)
 
-debugger/%: OC_BYTECODE_LINKFLAGS = -linkall
+ocamldebug_BYTECODE_LINKFLAGS = -linkall
 
 debugger/%: CAMLC = $(BEST_OCAMLC) $(STDLIBFLAGS)
 
@@ -2142,6 +2236,18 @@ lintapidiff: tools/lintapidiff.opt$(EXE)
 	    grep -Ev internal\|obj\|stdLabels\|moreLabels |\
 	    tools/lintapidiff.opt $(VERSIONS)
 
+# Regenerate otherlibs/dynlink/byte/dynlink_symtable from its bytecomp sources
+
+sync_dynlink_SOURCES = tools/sync_dynlink.mli tools/sync_dynlink.ml
+sync_dynlink_LIBRARIES =
+
+.PHONY: sync_dynlink
+sync_dynlink: tools/sync_dynlink.opt$(EXE)
+	    ./tools/sync_dynlink.opt$(EXE) \
+        otherlibs/dynlink/byte/dynlink_symtable.ml \
+      > synced_dynlink.tmp
+	    diff -u synced_dynlink.tmp otherlibs/dynlink/byte/dynlink_symtable.ml
+	    rm synced_dynlink.tmp
 # Tools
 
 TOOLS_BYTECODE_TARGETS = \
@@ -2449,18 +2555,73 @@ partialclean::
 	    $$d/*.o $$d/*.obj $$d/*.so $$d/*.dll; \
 	done
 
+%.depend: beforedepend
+	$(V_OCAMLDEP)$(OCAMLDEP) $(OC_OCAMLDEPFLAGS) -I $* $(INCLUDES) \
+	  $(OCAMLDEPFLAGS) $*/*.mli $*/*.ml > $@
+
+asmcomp.depend:: beforedepend $(cvt_emit)
+	$(V_OCAMLDEP)$(OCAMLDEP) $(OC_OCAMLDEPFLAGS) -I asmcomp $(INCLUDES) \
+	  $(OCAMLDEPFLAGS) $(filter-out $(ARCH_SPECIFIC) asmcomp/emit.ml, \
+	                                $(wildcard asmcomp/*.mli asmcomp/*.ml)) > $@
+
+partialclean::
+	rm -f $(addsuffix .depend, $(ARCH_SPECIFIC) asmcomp/emit.ml)
+
+# asmcomp.depend contains the dependencies for all the backends, with ifeq used
+# to select the correct one depending on the ARCH variable. In order to
+# generate this file, we must temporarily replace the $(ARCH_SPECIFIC) files
+# with the ones for each architecture. At the end of this process, the files for
+# the active architecture (i.e. $(ARCH)) must be restored, but if we simply
+# re-link the files we will trigger a complete rebuild of the native compiler
+# and .opt binaries. The recipe for asmcomp.depend therefore begins by renaming
+# the existing files, then it generates asmcomp.depend and then we rename the
+# files back. This means their timestamps are unaltered, and the next invocation
+# of make therefore correctly doesn't rebuild anything.
+
+define MV_FILE
+asmcomp.depend::
+	@mv $(1) $(2)
+
+endef
+
+$(foreach file, asmcomp/emit.ml $(ARCH_SPECIFIC),\
+  $(eval $(call MV_FILE,$(file),$(file).depend)))
+
+define ADD_ARCH_SPECIFIC_DEPS
+asmcomp.depend::
+	@echo 'ifeq "$$$$(ARCH)" "$(1)"' > asmcomp/$(1).depend
+	@$$(MAKE) ARCH=$(1) asmcomp/emit.ml $$(ARCH_SPECIFIC)
+	@$$(OCAMLDEP) $$(OC_OCAMLDEPFLAGS) -I asmcomp $$(INCLUDES) \
+	  $$(OCAMLDEPFLAGS) asmcomp/emit.ml $$(ARCH_SPECIFIC) >> asmcomp/$(1).depend
+	@echo 'endif # ifeq "$$$$(ARCH)" "$(1)"' >> asmcomp/$(1).depend
+	@rm -f asmcomp/emit.ml $$(ARCH_SPECIFIC)
+
+endef
+
+$(foreach arch, $(ARCHES),\
+  $(eval $(call ADD_ARCH_SPECIFIC_DEPS,$(arch))))
+
+asmcomp.depend::
+	@cat $(addprefix asmcomp/, $(addsuffix .depend, $(ARCHES))) >> $@
+	@rm -f $(addprefix asmcomp/, $(addsuffix .depend, $(ARCHES)))
+
+$(foreach file, asmcomp/emit.ml $(ARCH_SPECIFIC),\
+  $(eval $(call MV_FILE,$(file).depend,$(file))))
+
+DEP_DIRS = \
+  utils parsing typing bytecomp asmcomp middle_end lambda file_formats \
+  middle_end/closure middle_end/flambda middle_end/flambda/base_types driver \
+  toplevel toplevel/byte toplevel/native lex tools debugger ocamldoc ocamltest \
+  testsuite/lib testsuite/tools otherlibs/dynlink
+
+DEP_FILES = $(addsuffix .depend, $(DEP_DIRS))
+
+.INTERMEDIATE: $(DEP_FILES)
+
 .PHONY: depend
-depend: beforedepend
-	$(V_GEN)for d in utils parsing typing bytecomp asmcomp middle_end \
-         lambda file_formats middle_end/closure middle_end/flambda \
-         middle_end/flambda/base_types \
-         driver toplevel toplevel/byte toplevel/native lex tools debugger \
-	 ocamldoc ocamltest testsuite/lib testsuite/tools; \
-	 do \
-	   $(OCAMLDEP) $(OC_OCAMLDEPFLAGS) -I $$d $(INCLUDES) \
-	   $(OCAMLDEPFLAGS) $$d/*.mli $$d/*.ml \
-	   || exit; \
-         done > .depend
+depend: $(DEP_FILES) | beforedepend
+	$(V_GEN)cat $^ > .$@
+	@rm -f $(DYNLINK_DEPEND_DUMMY_FILES)
 
 .PHONY: distclean
 distclean: clean
@@ -2470,6 +2631,10 @@ endif
 	$(MAKE) -C manual distclean
 	rm -f ocamldoc/META
 	rm -f $(addprefix ocamltest/,ocamltest_config.ml ocamltest_unix.ml)
+	rm -f otherlibs/dynlink/META otherlibs/dynlink/dynlink_config.ml \
+	  otherlibs/dynlink/dynlink_cmo_format.mli \
+	  otherlibs/dynlink/dynlink_cmxs_format.mli \
+	  otherlibs/dynlink/dynlink_platform_intf.mli
 	$(MAKE) -C otherlibs distclean
 	rm -f $(runtime_CONFIGURED_HEADERS)
 	$(MAKE) -C stdlib distclean
@@ -2484,6 +2649,8 @@ endif
 	rm -rf autom4te.cache winpthreads-sources flexdll-sources \
          $(BYTE_BUILD_TREE) $(OPT_BUILD_TREE)
 	rm -f config.log config.status libtool
+
+INSTALL_LIBDIR_DYNLINK = $(INSTALL_LIBDIR)/dynlink
 
 # Installation
 .PHONY: install
@@ -2585,7 +2752,22 @@ endif
 ifeq "$(UNIX_OR_WIN32)" "unix" # Install manual pages only on Unix
 	$(MAKE) -C man install
 endif
-	for i in $(OTHERLIBRARIES); do \
+# For dynlink, if installing over a previous OCaml version, ensure
+# dynlink is removed from the previous installation.
+	rm -f "$(INSTALL_LIBDIR)"/dynlink.cm* "$(INSTALL_LIBDIR)/dynlink.mli" \
+        "$(INSTALL_LIBDIR)/dynlink.$(A)" \
+        $(addprefix "$(INSTALL_LIBDIR)/", $(notdir $(dynlink_CMX_FILES)))
+	$(MKDIR) "$(INSTALL_LIBDIR_DYNLINK)"
+	$(INSTALL_DATA) \
+	  otherlibs/dynlink/dynlink.cmi otherlibs/dynlink/dynlink.cma \
+	  otherlibs/dynlink/META \
+	  "$(INSTALL_LIBDIR_DYNLINK)"
+ifeq "$(INSTALL_SOURCE_ARTIFACTS)" "true"
+	$(INSTALL_DATA) \
+	  otherlibs/dynlink/dynlink.cmti otherlibs/dynlink/dynlink.mli \
+	  "$(INSTALL_LIBDIR_DYNLINK)"
+endif
+	for i in $(OTHERLIBS); do \
 	  $(MAKE) -C otherlibs/$$i install || exit $$?; \
 	done
 ifeq "$(build_ocamldoc)" "true"
@@ -2706,7 +2888,13 @@ endif
 	  ocamldoc/odoc_info.cmxa \
 	  "$(INSTALL_LIBDIR)/ocamldoc"
 endif
-	for i in $(OTHERLIBRARIES); do \
+ifeq "$(strip $(NATDYNLINK))" "true"
+	$(INSTALL_DATA) \
+	  $(dynlink_CMX_FILES) otherlibs/dynlink/dynlink.cmxa \
+	  otherlibs/dynlink/dynlink.$(A) \
+	  "$(INSTALL_LIBDIR_DYNLINK)"
+endif
+	for i in $(OTHERLIBS); do \
 	  $(MAKE) -C otherlibs/$$i installopt || exit $$?; \
 	done
 ifeq "$(INSTALL_BYTECODE_PROGRAMS)" "true"
@@ -2779,6 +2967,11 @@ ifeq "$(INSTALL_SOURCE_ARTIFACTS)" "true"
 endif
 
 include .depend
+
+# Include the cross-compiler recipes only when relevant
+ifneq "$(HOST)" "$(TARGET)"
+include Makefile.cross
+endif
 
 Makefile.config Makefile.build_config: config.status
 config.status:

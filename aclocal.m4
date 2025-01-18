@@ -30,6 +30,7 @@ m4_include([build-aux/lt~obsolete.m4])
 # Macros from the autoconf macro archive
 m4_include([build-aux/ax_check_compile_flag.m4])
 m4_include([build-aux/ax_func_which_gethostbyname_r.m4])
+m4_include([build-aux/ax_prog_cc_for_build.m4])
 m4_include([build-aux/ax_pthread.m4])
 
 # OCaml version
@@ -94,19 +95,12 @@ AC_DEFUN([OCAML_SIGNAL_HANDLERS_SEMANTICS], [
   )
 ])
 
-AC_DEFUN([OCAML_CC_SUPPORTS_ALIGNED], [
-  AC_MSG_CHECKING([whether the C compiler supports __attribute__((aligned(n)))])
-  AC_COMPILE_IFELSE(
-    [AC_LANG_SOURCE([typedef struct {__attribute__((aligned(8))) int t;} t;])],
-    [AC_DEFINE([SUPPORTS_ALIGNED_ATTRIBUTE], [1])
-    AC_MSG_RESULT([yes])],
-    [AC_MSG_RESULT([no])])])
-
+dnl $1: extra CFLAGS
 AC_DEFUN([OCAML_CC_SUPPORTS_TREE_VECTORIZE], [
   AC_MSG_CHECKING(
  [whether the C compiler supports __attribute__((optimize("tree-vectorize")))])
   saved_CFLAGS="$CFLAGS"
-  CFLAGS="-Werror $CFLAGS"
+  CFLAGS="$1 $CFLAGS"
   AC_COMPILE_IFELSE(
     [AC_LANG_PROGRAM(
       [[__attribute__((optimize("tree-vectorize"))) void f(void) {}]],
@@ -377,27 +371,27 @@ AC_DEFUN([OCAML_TEST_WINPTHREADS_PTHREAD_H], [
   OCAML_CC_RESTORE_VARIABLES
 ])
 
-AC_DEFUN([OCAML_HOST_IS_EXECUTABLE], [
-  AC_MSG_CHECKING([whether host executables can be run in the build])
+AC_DEFUN([OCAML_TARGET_IS_EXECUTABLE], [
+  AC_MSG_CHECKING([whether target executables can be run in the build])
   old_cross_compiling="$cross_compiling"
   cross_compiling='no'
   AC_RUN_IFELSE(
     [AC_LANG_PROGRAM],
     [AC_MSG_RESULT([yes])
-    host_runnable=true],
+    target_runnable=true],
     [AC_MSG_RESULT([no])
-    host_runnable=false],
+    target_runnable=false],
     # autoconf displays a warning if this parameter is missing, but
     # cross-compilation mode was disabled above.
     [assert=false])
   cross_compiling="$old_cross_compiling"
 ])
 
-# This is AC_RUN_IFELSE but taking $host_runnable into account (i.e. if the
+# This is AC_RUN_IFELSE but taking $target_runnable into account (i.e. if the
 # program can be run, then it is run)
 AC_DEFUN([OCAML_RUN_IFELSE], [
   old_cross_compiling="$cross_compiling"
-  AS_IF([test "x$host_runnable" = 'xtrue'], [cross_compiling='no'])
+  AS_IF([test "x$target_runnable" = 'xtrue'], [cross_compiling='no'])
   AC_RUN_IFELSE([$1],[$2],[$3],[$4])
   cross_compiling="$old_cross_compiling"
 ])
@@ -434,7 +428,7 @@ AC_DEFUN([OCAML_C99_CHECK_FMA], [
   OCAML_RUN_IFELSE(
     [AC_LANG_PROGRAM([[#include <math.h>]],[[
   /* Tests 264-266 from testsuite/tests/fma/fma.ml. These tests trigger the
-     broken implementations of Cygwin64, mingw-w64 (x86_64) and VS2013-2017.
+     broken implementations of Cygwin64 and mingw-w64 (x86_64).
      The static volatile variables aim to thwart GCC's constant folding. */
   static volatile double x, y, z;
   volatile double t264, t265, t266;
@@ -466,11 +460,7 @@ AC_DEFUN([OCAML_C99_CHECK_FMA], [
       [no,*], [hard_error=true],
       [yes,*], [hard_error=false],
       [*,x86_64-w64-mingw32*|*,x86_64-*-cygwin*], [hard_error=false],
-      [AS_CASE([$ocaml_cc_vendor],
-        [msvc-*], [AS_IF([test "${ocaml_cc_vendor#msvc-}" -lt 1920 ],
-          [hard_error=false],
-          [hard_error=true])],
-        [hard_error=true])])
+      [hard_error=true])
     AS_IF([test x"$hard_error" = "xtrue"],
       [AC_MSG_ERROR(m4_normalize([
         fma does not work, enable emulation with
@@ -535,4 +525,34 @@ AC_DEFUN([OCAML_CC_SUPPORTS_ATOMIC], [
    AC_MSG_RESULT([no])])
 
   OCAML_CC_RESTORE_VARIABLES
+])
+
+AC_DEFUN([OCAML_CC_SUPPORTS_LABELS_AS_VALUES], [
+  AC_CACHE_CHECK([whether $CC supports the labels as values extension],
+    [ocaml_cv_prog_cc_labels_as_values],
+    [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [[
+  void *ptr;
+  ptr = &&foo;
+  goto *ptr;
+  return 1;
+  foo:
+     ]])],
+       [ocaml_cv_prog_cc_labels_as_values=yes],
+       [ocaml_cv_prog_cc_labels_as_values=no])
+  ])
+  if test "x$ocaml_cv_prog_cc_labels_as_values" = xyes; then
+    AC_DEFINE([HAVE_LABELS_AS_VALUES], [1],
+      [Define if the C compiler supports the labels as values extension.])
+  fi
+])
+
+AC_DEFUN([OCAML_CHECK_LN_ON_WINDOWS], [
+  AC_MSG_CHECKING([for a workable solution for ln -sf])
+  AS_IF([m4_normalize(MSYS=winsymlinks:nativestrict
+                      CYGWIN=winsymlinks:nativestrict
+                      ln -sf configure conftestLink 2>/dev/null)],
+    [ln='ln -sf'],
+    [ln='cp -pf']
+  )
+  AC_MSG_RESULT([$ln])
 ])

@@ -32,6 +32,19 @@
 #define C_ARG_3 a2
 #define C_ARG_4 a3
 
+
+/* DWARF
+
+   These RISC-V specific register numbers come from
+   Table 19. "DWARF register number encodings" of:
+
+   RISC-V ABIs Specification, Document Version 1.0
+   https://github.com/riscv-non-isa/riscv-elf-psabi-doc/releases/tag/v1.0
+
+*/
+#define DW_REG_s4                 20
+#define DW_REG_sp                 2
+
         .set    domain_curr_field, 0
 #define DOMAIN_STATE(c_type, name) \
         .equ    domain_field_caml_##name, domain_curr_field ; \
@@ -50,13 +63,13 @@
 #endif
 
 #if defined(FUNCTION_SECTIONS)
-        TEXT_SECTION(caml_hot.code_begin)
-        .globl caml_hot.code_begin
-caml_hot.code_begin:
+        TEXT_SECTION(caml_hot$code_begin)
+        .globl caml_hot$code_begin
+caml_hot$code_begin:
 
-        TEXT_SECTION(caml_hot.code_end)
-        .globl caml_hot.code_end
-caml_hot.code_end:
+        TEXT_SECTION(caml_hot$code_end)
+        .globl caml_hot$code_end
+caml_hot$code_end:
 #endif
 
 /* Globals and labels */
@@ -112,6 +125,7 @@ name:
 
 /* struct stack_info */
 #define Stack_sp(reg)           0(reg)
+#define Stack_sp_offset         0
 #define Stack_exception(reg)    8(reg)
 #define Stack_handler(reg)      16(reg)
 #define Stack_handler_from_cont(reg) 15(reg)
@@ -119,6 +133,7 @@ name:
 /* struct c_stack_link */
 #define Cstack_stack(reg)       0(reg)
 #define Cstack_sp(reg)          8(reg)
+#define Cstack_sp_offset        8
 #define Cstack_prev(reg)        16(reg)
 
 /* struct stack_handler */
@@ -126,6 +141,7 @@ name:
 #define Handler_exception(reg)  8(reg)
 #define Handler_effect(reg)     16(reg)
 #define Handler_parent(reg)     24(reg)
+#define Handler_parent_offset   24
 
 /* Switch from OCaml to C stack. */
 .macro SWITCH_OCAML_TO_C
@@ -138,7 +154,13 @@ name:
         sd      sp, Cstack_sp(TMP2)
     /* Switch to C stack */
         mv      sp, TMP2
+#ifdef ASM_CFI_SUPPORTED
         CFI_REMEMBER_STATE
+    /* sp points to the c_stack_link. */
+        .cfi_escape DW_CFA_def_cfa_expression, 5,                 \
+           DW_OP_breg + DW_REG_sp, Cstack_sp_offset, DW_OP_deref, \
+           DW_OP_plus_uconst, 16 /* fp + retaddr */
+#endif
 .endm
 
 /* Switch from C to OCaml stack. */
@@ -404,13 +426,15 @@ name:
 
 #endif /* } WITH_THREAD_SANITIZER */
 
-/* Invoke the garbage collector. */
-
+/* Allocation functions and GC interface.
+   Referenced from C code in runtime/startup_nat.c
+ */
         TEXT_SECTION(caml_system__code_begin)
         .globl  caml_system__code_begin
 caml_system__code_begin:
 
 FUNCTION(caml_call_realloc_stack)
+        CFI_SIGNAL_FRAME
     /* Save return address */
         ENTER_FUNCTION
     /* Save all registers (including ALLOC_PTR & TRAP_PTR) */
@@ -434,6 +458,7 @@ END_FUNCTION(caml_call_realloc_stack)
 
 FUNCTION(caml_call_gc)
 L(caml_call_gc):
+        CFI_SIGNAL_FRAME
     /* Save return address */
         ENTER_FUNCTION
     /* Store all registers (including ALLOC_PTR & TRAP_PTR) */
@@ -492,6 +517,7 @@ END_FUNCTION(caml_allocN)
 
 FUNCTION(caml_c_call)
 L(caml_c_call):
+        CFI_SIGNAL_FRAME
         ENTER_FUNCTION
         TSAN_SAVE_CALLER_REGS
         TSAN_ENTER_FUNCTION
@@ -531,6 +557,7 @@ L(caml_c_call):
 END_FUNCTION(caml_c_call)
 
 FUNCTION(caml_c_call_stack_args)
+        CFI_SIGNAL_FRAME
     /* Arguments:
         C arguments  : a0 to a7, fa0 to fa7
         C function   : ADDITIONAL_ARG
@@ -572,6 +599,7 @@ END_FUNCTION(caml_c_call_stack_args)
 /* Start the OCaml program */
 
 FUNCTION(caml_start_program)
+        CFI_SIGNAL_FRAME
 #if defined(WITH_THREAD_SANITIZER)
         addi    sp, sp, -16
         CFI_ADJUST(16)
@@ -597,8 +625,10 @@ FUNCTION(caml_start_program)
 
 L(jump_to_caml):
     /* Set up stack frame and save callee-save registers */
+        CFI_OFFSET(s0, -208)
         CFI_OFFSET(ra, -200)
         addi    sp, sp, -208
+        sd      s0, 0(sp)
         sd      ra, 8(sp)
         CFI_ADJUST(208)
         sd      s0, (2*8)(sp)
@@ -632,10 +662,10 @@ L(jump_to_caml):
     /* Build (16-byte aligned) struct c_stack_link on the C stack */
         ld      t2, Caml_state(c_stack)
         addi    sp, sp, -32
+        CFI_ADJUST(32)
         sd      t2, Cstack_prev(sp)
         sd      x0, Cstack_stack(sp)
         sd      x0, Cstack_sp(sp)
-        CFI_ADJUST(32)
         sd      sp, Caml_state(c_stack)
     /* Load the OCaml stack */
         ld      t2, Caml_state(current_stack)
@@ -656,7 +686,18 @@ L(jump_to_caml):
         mv      TRAP_PTR, t2
     /* Switch stacks and call the OCaml code */
         mv      sp, t2
+#ifdef ASM_CFI_SUPPORTED
         CFI_REMEMBER_STATE
+        .cfi_escape DW_CFA_def_cfa_expression, 3 + 2 + 2,             \
+            /* sp points to the exn handler on the OCaml stack */     \
+            /* sp + 16 contains the C_STACK_SP */                     \
+          DW_OP_breg + DW_REG_sp, 16 /* exn handler */, DW_OP_deref,  \
+            /* 32   struct c_stack_link + pad */                      \
+            /* 24*8 callee save regs */                               \
+            /* 16   fp + ret addr */                                  \
+            /* need to split to get under 127 limit */                \
+          DW_OP_plus_uconst, 120, DW_OP_plus_uconst, 120
+#endif
     /* Call the OCaml code */
         jalr    TMP2
 L(caml_retaddr):
@@ -1114,6 +1155,7 @@ FUNCTION(caml_runstack)
         addi    sp, sp, 32
         CFI_ADJUST(-32)
 #endif
+        CFI_SIGNAL_FRAME
     /*  a0: fiber
         a1: fun
         a2: arg */
@@ -1140,7 +1182,17 @@ FUNCTION(caml_runstack)
         mv      TRAP_PTR, t3
     /* Switch to the new stack */
         mv      sp, t3
+#ifdef ASM_CFI_SUPPORTED
         CFI_REMEMBER_STATE
+        .cfi_escape DW_CFA_def_cfa_expression, 3+3+2,       \
+          DW_OP_breg + DW_REG_sp,                           \
+            16 /* exn */ +                                  \
+            8 /* gc_regs slot (unused) */ +                 \
+            8 /* C_STACK_SP for DWARF (unused) */           \
+            + Handler_parent_offset, DW_OP_deref,           \
+          DW_OP_plus_uconst, Stack_sp_offset, DW_OP_deref,  \
+          DW_OP_plus_uconst, 16 /* fp + ret addr */
+#endif
     /* Call the function on the new stack */
         mv      a0, a2
         jalr    a3
@@ -1160,6 +1212,7 @@ L(frame_runstack):
         ld      s4, Stack_sp(TMP) /* saved across C call */
         CFI_RESTORE_STATE
         CFI_REMEMBER_STATE
+        CFI_DEF_CFA_REGISTER(DW_REG_s4)
         ld      TMP, Caml_state(c_stack)
         mv      sp, TMP
         call    PLT(caml_free_stack)
@@ -1192,9 +1245,9 @@ END_FUNCTION(caml_ml_array_bound_error)
         .globl  caml_system__code_end
 caml_system__code_end:
 
-/* GC roots for callback */
-
-OBJECT(caml_system.frametable)
+/* Frametable - GC roots for callback */
+/* Uses the same naming convention as ocamlopt generated modules. */
+OBJECT(caml_system$frametable)
         .quad   2                 /* two descriptors */
         .quad   L(caml_retaddr)   /* return address into callback */
         .short  -1                /* negative frame size => use callback link */
@@ -1204,7 +1257,6 @@ OBJECT(caml_system.frametable)
         .short  -1                /* negative frame size => use callback link */
         .short  0                 /* no roots */
         .align  3
-END_OBJECT(caml_system.frametable)
-
+END_OBJECT(caml_system$frametable)
 /* Mark stack as non-executable */
         .section .note.GNU-stack,"",%progbits

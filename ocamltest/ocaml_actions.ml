@@ -220,7 +220,7 @@ let compile_program (compiler : Ocaml_compilers.compiler) log env =
   let output_variable = compiler#output_variable in
   let prepare = prepare_module output_variable log env in
   let modules =
-    List.concatmap prepare (List.map Ocaml_filetypes.filetype all_modules) in
+    List.concat_map prepare (List.map Ocaml_filetypes.filetype all_modules) in
   let has_c_file = List.exists is_c_file modules in
   let c_headers_flags =
     if has_c_file then Ocaml_flags.c_includes else "" in
@@ -350,7 +350,7 @@ let find_source_modules log env =
       ((plugins env) @ (modules env) @ [(Actions_helpers.testfile env)]) in
   print_module_names log "Specified" specified_modules;
   let source_modules =
-    List.concatmap
+    List.concat_map
       (add_module_interface source_directory)
       specified_modules in
   print_module_names log "Source" source_modules;
@@ -534,43 +534,6 @@ let env_with_lib_unix env =
   in
   Environments.add Ocaml_variables.caml_ld_library_path newlibs env
 
-let debug log env =
-  let program = Environments.safe_lookup Builtin_variables.program env in
-  let what = Printf.sprintf "Debugging program %s" program in
-  Printf.fprintf log "%s\n%!" what;
-  let commandline =
-  [
-    Ocaml_commands.ocamlrun_ocamldebug;
-    Ocaml_flags.ocamldebug_default_flags;
-    program
-  ] in
-  let systemenv =
-    Environments.append_to_system_env
-      default_ocaml_env
-      (env_with_lib_unix env)
-  in
-  let expected_exit_status = 0 in
-  let exit_status =
-    Actions_helpers.run_cmd
-      ~environment:systemenv
-      ~stdin_variable: Ocaml_variables.ocamldebug_script
-      ~stdout_variable:Builtin_variables.output
-      ~stderr_variable:Builtin_variables.output
-      ~append:true
-      log (env_with_lib_unix env) commandline in
-  if exit_status=expected_exit_status
-  then (Result.pass, env)
-  else begin
-    let reason =
-      (Actions_helpers.mkreason
-        what (String.concat " " commandline) exit_status) in
-    (Result.fail_with_reason reason, env)
-  end
-
-let ocamldebug =
-  Actions.make ~name:"ocamldebug" ~description:"Run ocamldebug on the program"
-    debug
-
 let objinfo log env =
   let tools_directory = Ocaml_directories.tools in
   let program = Environments.safe_lookup Builtin_variables.program env in
@@ -611,7 +574,13 @@ let objinfo log env =
 
 let ocamlobjinfo =
   Actions.make ~name:"ocamlobjinfo"
-    ~description:"Run ocamlobjinfo on the program" objinfo
+    ~description:"Run ocamlobjinfo on the program"
+    (fun log env ->
+       if Ocamltest_config.ocamlobjinfo then
+         objinfo log env
+       else
+         Result.skip_with_reason "ocamlobjinfo not available", env
+    )
 
 let mklib log env =
   let program = Environments.safe_lookup Builtin_variables.program env in
@@ -1438,7 +1407,6 @@ let _ =
     setup_ocamldoc_build_env;
     run_ocamldoc;
     check_ocamldoc_output;
-    ocamldebug;
     ocamlmklib;
     codegen;
     cc;

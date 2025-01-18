@@ -47,27 +47,29 @@ val c_has_debug_prefix_map : bool
 val as_has_debug_prefix_map : bool
 (** Whether the assembler supports --debug-prefix-map *)
 
-val ocamlc_cflags : string
+val bytecode_cflags : string
 (** The flags ocamlc should pass to the C compiler *)
 
-val ocamlc_cppflags : string
+val bytecode_cppflags : string
 (** The flags ocamlc should pass to the C preprocessor *)
 
-val ocamlopt_cflags : string
-  [@@ocaml.deprecated "Use ocamlc_cflags instead."]
-(** @deprecated {!ocamlc_cflags} should be used instead.
-    The flags ocamlopt should pass to the C compiler *)
+val native_cflags : string
+(** The flags ocamlopt should pass to the C compiler *)
 
-val ocamlopt_cppflags : string
-  [@@ocaml.deprecated "Use ocamlc_cppflags instead."]
-(** @deprecated {!ocamlc_cppflags} should be used instead.
-    The flags ocamlopt should pass to the C preprocessor *)
+val native_cppflags : string
+(** The flags ocamlopt should pass to the C preprocessor *)
 
 val bytecomp_c_libraries: string
 (** The C libraries to link with custom runtimes *)
 
 val native_c_libraries: string
 (** The C libraries to link with native-code programs *)
+
+val compression_c_libraries: string
+(** The C libraries needed with -lcomprmarsh (should appear before
+    {!native_c_libraries} in a call to the C compiler)
+
+    @since 5.4 *)
 
 val native_ldflags : string
 (* Flags to pass to the system linker *)
@@ -167,6 +169,12 @@ val model: string
 val system: string
 (** Name of operating system for the native-code compiler *)
 
+val target_os_type: string
+(** Operating system targetted by the native-code compiler. One of
+-  ["Unix"] (for all Unix versions, including Linux and macOS),
+-  ["Win32"] (for MS-Windows, OCaml compiled with MSVC++ or MinGW-w64),
+-  ["Cygwin"] (for MS-Windows, OCaml compiled with Cygwin). *)
+
 val asm: string
 (** The assembler (and flags) to use for assembling
     ocamlopt-generated code. *)
@@ -219,12 +227,22 @@ val with_flambda_invariants : bool
 val with_cmm_invariants : bool
 (** Whether the invariants checks for Cmm are enabled *)
 
+val with_codegen_invariants : bool
+(** Whether the invariant checks for native code generation are enabled. *)
+
 val reserved_header_bits : int
 (** How many bits of a block's header are reserved *)
 
 val flat_float_array : bool
 (** Whether the compiler and runtime automagically flatten float
     arrays *)
+
+val align_double : bool
+(** Whether the compiler and runtime need to align double values.
+    If [false], a [floatarray] value can be cast to a C array of doubles. *)
+
+val align_int64 : bool
+(** Whether the compiler and runtime need to align int64 values *)
 
 val function_sections : bool
 (** Whether the compiler was configured to generate

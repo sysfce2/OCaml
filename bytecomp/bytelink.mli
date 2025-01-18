@@ -41,7 +41,9 @@ type error =
   | Cannot_open_dll of filepath
   | Camlheader of string * filepath
   | Link_error of Linkdeps.error
+  | Needs_custom_runtime of filepath
 
 exception Error of error
 
-val report_error: error Format_doc.printer
+val report_error: error Format_doc.format_printer
+val report_error_doc: error Format_doc.printer

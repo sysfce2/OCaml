@@ -92,7 +92,7 @@ let eval_value_path env path =
 (* Install, remove a printer (as in toplevel/topdirs) *)
 
 let match_printer_type desc make_printer_type =
-  Ctype.with_local_level ~post:Ctype.generalize begin fun () ->
+  Ctype.with_local_level_generalize begin fun () ->
     let ty_arg = Ctype.newvar() in
     Ctype.unify Env.empty
       (make_printer_type ty_arg)
@@ -141,7 +141,7 @@ let remove_printer lid =
 open Format
 module Style = Misc.Style
 let quoted_longident =
-  Format_doc.compat @@ Style.as_inline_code Printtyp.longident
+  Format_doc.compat @@ Style.as_inline_code Printtyp.Doc.longident
 
 let report_error ppf = function
   | Load_failure e ->

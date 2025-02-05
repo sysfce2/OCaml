@@ -17,24 +17,24 @@
 #ifndef CAML_DOMAIN_H
 #define CAML_DOMAIN_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #ifdef CAML_INTERNALS
+
+#include <stdbool.h>
 
 #include "camlatomic.h"
 #include "config.h"
 #include "mlvalues.h"
 #include "domain_state.h"
 
-/* The runtime currently has a hard limit on the number of domains.
-   This hard limit may go away in the future. */
 #ifdef ARCH_SIXTYFOUR
-#define Max_domains 128
+#define Max_domains_def 128
 #else
-#define Max_domains 16
+#define Max_domains_def 16
 #endif
+
+/* Upper limit for the number of domains. Chosen to be arbitrarily large. Used
+ * for sanity checking [max_domains] value in OCAMLRUNPARAM. */
+#define Max_domains_max 4096
 
 /* is the minor heap full or an external interrupt has been triggered */
 Caml_inline int caml_check_gc_interrupt(caml_domain_state * dom_st)
@@ -85,7 +85,7 @@ CAMLextern void (*caml_domain_initialize_hook)(void);
 CAMLextern void (*caml_domain_stop_hook)(void);
 CAMLextern void (*caml_domain_external_interrupt_hook)(void);
 
-CAMLextern void caml_init_domains(uintnat minor_heap_wsz);
+CAMLextern void caml_init_domains(uintnat max_domains, uintnat minor_heap_wsz);
 CAMLextern void caml_init_domain_self(int);
 
 CAMLextern uintnat caml_minor_heap_max_wsz;
@@ -113,12 +113,17 @@ Caml_inline int caml_domain_index(void)
 int caml_domain_is_in_stw(void);
 #endif
 
+int caml_domain_terminating(caml_domain_state *);
+int caml_domain_is_terminating(void);
+void caml_domain_terminate(bool last);
+
 int caml_try_run_on_all_domains_with_spin_work(
   int sync,
   void (*handler)(caml_domain_state*, void*, int, caml_domain_state**),
   void* data,
   void (*leader_setup)(caml_domain_state*),
-  void (*enter_spin_callback)(caml_domain_state*, void*),
+  /* return nonzero if there may still be useful work to do while spinning */
+  int (*enter_spin_callback)(caml_domain_state*, void*),
   void* enter_spin_data);
 int caml_try_run_on_all_domains(
   void (*handler)(caml_domain_state*, void*, int, caml_domain_state**),
@@ -179,21 +184,66 @@ int caml_try_run_on_all_domains(
 */
 
 
-/* barriers */
-typedef uintnat barrier_status;
-void caml_global_barrier(void);
-barrier_status caml_global_barrier_begin(void);
-int caml_global_barrier_is_final(barrier_status);
-void caml_global_barrier_end(barrier_status);
-int caml_global_barrier_num_domains(void);
+/* Barriers */
 
-int caml_domain_terminating(caml_domain_state *);
-int caml_domain_is_terminating(void);
+/* Get the number of parties expected to arrive into the barrier, i.e. the
+   number of domains participating in the STW section. In most cases the barrier
+   is used directly from an STW callback that already has the number of
+   participating domains at hand, which should be used instead. */
+int caml_global_barrier_num_participating(void);
+
+/* Unconditionally arrive at the barrier and wait for all parties,
+   [caml_global_barrier] below should be used instead. */
+void caml_enter_global_barrier(int num_participating);
+/* Arrive at the barrier and wait iff there is more than one party */
+Caml_inline void caml_global_barrier(int num_participating) {
+  if (num_participating != 1) caml_enter_global_barrier(num_participating);
+}
+
+typedef uintnat barrier_status;
+/* Arrive at the barrier; if we are the final party, immediately returns a
+   nonzero value to be passed to [caml_global_barrier_release_as_final]
+   later, otherwise blocks and returns zero. */
+barrier_status caml_global_barrier_and_check_final(int num_participating);
+/* Release the barrier with the given status */
+void caml_global_barrier_release_as_final(barrier_status status);
+/* Arrive at the global barrier and run the body if we are the final party.
+   Other threads will not be released from the barrier until the final party
+   finishes executing the body.
+
+   Example usage:
+
+   Caml_global_barrier_if_final(num_participating) {
+     do_something_in_final_domain();
+   }
+
+   Note: this expands to an [if] and [for] header, do not exit the body using
+   jumps or returns, and do not put an [else] immediately after.
+ */
+#define Caml_global_barrier_if_final(num_participating)                 \
+  /* fast path when alone */                                            \
+  int CAML_GENSYM(alone) = (num_participating) == 1;                    \
+  barrier_status CAML_GENSYM(b) = 0;                                    \
+  if (CAML_GENSYM(alone) ||                                             \
+      (CAML_GENSYM(b)                                                   \
+       = caml_global_barrier_and_check_final(num_participating)))       \
+    for (int CAML_GENSYM(continue) = 1; CAML_GENSYM(continue);          \
+         /* release the barrier after the body has executed once */     \
+         ((CAML_GENSYM(alone) ? (void)0 :                               \
+           caml_global_barrier_release_as_final(CAML_GENSYM(b))),       \
+          CAML_GENSYM(continue) = 0))
+
+/*
+ * Termination helpers.
+ */
+
+/* Force all other domains to stop their operation. */
+void caml_stop_all_domains(void);
+
+/* Try and release all synchronisation resources set up by
+   caml_init_domains(). Returns whether all resources could be released. */
+bool caml_free_domains(void);
 
 #endif /* CAML_INTERNALS */
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* CAML_DOMAIN_H */

@@ -22,11 +22,14 @@
 #include "caml/backtrace.h"
 #include "caml/memory.h"
 #include "caml/callback.h"
+#include "caml/domain.h"
 #include "caml/major_gc.h"
 #ifndef NATIVE_CODE
 #include "caml/dynlink.h"
 #endif
+#include "caml/gc_stats.h"
 #include "caml/osdeps.h"
+#include "caml/shared_heap.h"
 #include "caml/startup_aux.h"
 #include "caml/prims.h"
 #include "caml/signals.h"
@@ -52,10 +55,11 @@ static void init_startup_params(void)
   params.init_custom_minor_ratio = Custom_minor_ratio_def;
   params.init_custom_minor_max_bsz = Custom_minor_max_bsz_def;
   params.init_max_stack_wsz = Max_stack_def;
+  params.max_domains = Max_domains_def;
   params.runtime_events_log_wsize = Default_runtime_events_log_wsize;
 
 #ifdef DEBUG
-  atomic_store_relaxed(&caml_verb_gc, 0x3F);
+  atomic_store_relaxed(&caml_verb_gc, CAML_GC_MSG_VERBOSE | CAML_GC_MSG_MINOR);
 #endif
 #ifndef NATIVE_CODE
   cds_file = caml_secure_getenv(T("CAML_DEBUG_FILE"));
@@ -97,6 +101,7 @@ void caml_parse_ocamlrunparam(void)
       switch (*opt++){
       case 'b': scanmult (opt, &params.backtrace_enabled); break;
       case 'c': scanmult (opt, &params.cleanup_on_exit); break;
+      case 'd': scanmult (opt, &params.max_domains); break;
       case 'e': scanmult (opt, &params.runtime_events_log_wsize); break;
       case 'l': scanmult (opt, &params.init_max_stack_wsz); break;
       case 'M': scanmult (opt, &params.init_custom_major_ratio); break;
@@ -120,6 +125,15 @@ void caml_parse_ocamlrunparam(void)
       }
     }
   }
+
+  /* Validate */
+  if (params.max_domains < 1) {
+    caml_fatal_error("OCAMLRUNPARAM: max_domains(d) must be at least 1");
+  }
+  if (params.max_domains > Max_domains_max) {
+    caml_fatal_error("OCAMLRUNPARAM: max_domains(d) is too large. "
+                     "The maximum value is %d.", Max_domains_max);
+  }
 }
 
 
@@ -138,8 +152,8 @@ int caml_startup_aux(int pooling)
 
 #ifdef DEBUG
   /* Note this must be executed after the call to caml_parse_ocamlrunparam. */
-  caml_gc_message (-1, "### OCaml runtime: debug mode ###\n");
-  caml_gc_message (-1, "### set OCAMLRUNPARAM=v=0 to silence this message\n");
+  CAML_GC_MESSAGE(ANY, "### OCaml runtime: debug mode ###\n");
+  CAML_GC_MESSAGE(ANY, "### set OCAMLRUNPARAM=v=0 to silence this message\n");
 #endif
 
   /* Second and subsequent calls are ignored,
@@ -154,16 +168,17 @@ int caml_startup_aux(int pooling)
   return 1;
 }
 
-static void call_registered_value(char* name)
+static void call_registered_value(const char* name)
 {
   const value *f = caml_named_value(name);
   if (f != NULL)
-    caml_callback_exn(*f, Val_unit);
+    caml_callback_res(*f, Val_unit);
 }
 
 CAMLexport void caml_shutdown(void)
 {
   Caml_check_caml_state();
+
   if (startup_count <= 0)
     caml_fatal_error("a call to caml_shutdown has no "
                      "corresponding call to caml_startup");
@@ -175,12 +190,21 @@ CAMLexport void caml_shutdown(void)
 
   call_registered_value("Pervasives.do_at_exit");
   call_registered_value("Thread.at_shutdown");
-  caml_finalise_heap();
+  if (!caml_domain_alone()) {
+    caml_gc_log("Some domains have not been joined prior to shutdown");
+    caml_stop_all_domains();
+  } else {
+    /* These calls are not safe to use if there are domains left running */
+    caml_domain_terminate(true);
+    caml_finalise_freelist();
+  }
+  caml_free_gc_stats();
   caml_free_locale();
 #ifndef NATIVE_CODE
   caml_free_shared_libs();
 #endif
-  caml_stat_destroy_pool();
+  if (caml_free_domains())
+    caml_stat_destroy_pool();
   caml_terminate_signals();
 #if defined(_WIN32) && defined(NATIVE_CODE)
   caml_win32_unregister_overflow_detection();

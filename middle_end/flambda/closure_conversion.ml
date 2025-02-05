@@ -397,9 +397,12 @@ let rec close t env (lam : Lambda.lambda) : Flambda.t =
         | Int_size -> lambda_const_int (8*Backend.size_int - 1)
         | Max_wosize ->
             lambda_const_int ((1 lsl ((8*Backend.size_int) - 10)) - 1)
-        | Ostype_unix -> lambda_const_bool (String.equal Sys.os_type "Unix")
-        | Ostype_win32 -> lambda_const_bool (String.equal Sys.os_type "Win32")
-        | Ostype_cygwin -> lambda_const_bool (String.equal Sys.os_type "Cygwin")
+        | Ostype_unix ->
+            lambda_const_bool (String.equal Config.target_os_type "Unix")
+        | Ostype_win32 ->
+            lambda_const_bool (String.equal Config.target_os_type "Win32")
+        | Ostype_cygwin ->
+            lambda_const_bool (String.equal Config.target_os_type "Cygwin")
         | Backend_type ->
             Lambda.const_int 0 (* tag 0 is the same as Native *)
         end
@@ -473,10 +476,16 @@ let rec close t env (lam : Lambda.lambda) : Flambda.t =
   | Lstaticcatch (body, (i, ids), handler) ->
     let st_exn = Static_exception.create () in
     let env = Env.add_static_exception env i st_exn in
-    let ids = List.map fst ids in
-    let vars = List.map Variable.create_with_same_name_as_ident ids in
+    let vars =
+      List.map (fun (id, kind) ->
+          Variable.create_with_same_name_as_ident id, kind)
+        ids
+    in
+    let env_handler =
+      Env.add_vars env (List.map fst ids) (List.map fst vars)
+    in
     Static_catch (st_exn, vars, close t env body,
-      close t (Env.add_vars env ids vars) handler)
+      close t env_handler handler)
   | Ltrywith (body, id, handler) ->
     let var = Variable.create_with_same_name_as_ident id in
     Try_with (close t env body, var, close t (Env.add_var env id var) handler)

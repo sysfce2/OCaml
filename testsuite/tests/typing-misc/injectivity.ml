@@ -212,7 +212,7 @@ module F(X : sig type 'a t end) = struct
 end
 [%%expect{|
 module F :
-  functor (X : sig type 'a t end) ->
+  (X : sig type 'a t end) ->
     sig type 'a u = 'b X.t constraint 'a = < b : 'b X.t > end
 |}]
 (* But not too clever *)
@@ -232,7 +232,7 @@ module F(X : sig type 'a t end) = struct
 end
 [%%expect{|
 module F :
-  functor (X : sig type 'a t end) ->
+  (X : sig type 'a t end) ->
     sig type 'a u = 'b X.t constraint 'a = < b : 'b X.t > end
 |}, Principal{|
 Line 2, characters 2-51:
@@ -314,8 +314,7 @@ Line 47, characters 4-11:
 47 | let Some v' = undyn int_vec_vec d
          ^^^^^^^
 Warning 8 [partial-match]: this pattern-matching is not exhaustive.
-Here is an example of a case that is not matched:
-None
+  Here is an example of a case that is not matched: "None"
 
 val v' : int Vec.t Vec.t = <abstr>
 |}]
@@ -346,8 +345,7 @@ Line 17, characters 2-30:
 17 |   let Vec Int = vec_ty in Refl
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Warning 8 [partial-match]: this pattern-matching is not exhaustive.
-Here is an example of a case that is not matched:
-Vec (Vec Int)
+  Here is an example of a case that is not matched: "Vec (Vec Int)"
 
 val eq_int_any : unit -> (int, 'a) eq = <fun>
 |}]
@@ -396,7 +394,7 @@ let coerce : type a b. (a, b) eql -> a -> b = fun Refl x -> x;;
 [%%expect{|
 type (_, _) eql = Refl : ('a, 'a) eql
 module Uninj :
-  functor (X : sig type !'a t end) ->
+  (X : sig type !'a t end) ->
     sig val uninj : ('a X.t, 'b X.t) eql -> ('a, 'b) eql end
 val coerce : ('a, 'b) eql -> 'a -> 'b = <fun>
 |}]

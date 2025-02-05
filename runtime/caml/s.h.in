@@ -80,6 +80,8 @@
 
 #undef HAS_SYS_MMAN_H
 
+#undef HAS_LINUX_FUTEX_H
+
 /* 2. For the Unix library. */
 
 #undef HAS_SOCKETS
@@ -106,9 +108,15 @@
 
 #undef HAS_PTHREAD_NP_H
 
-#undef HAS_UNISTD
+#undef HAS_PRCTL
 
-/* Define HAS_UNISTD if you have /usr/include/unistd.h. */
+#undef HAS_PTHREAD_SETNAME_NP
+
+#undef HAS_PTHREAD_SET_NAME_NP
+
+#undef HAS_SETTHREADDESCRIPTION
+
+#undef HAS_DECL_SETTHREADDESCRIPTION
 
 #undef HAS_DIRENT
 
@@ -293,8 +301,6 @@
 
 #undef HAS_POSIX_SPAWN
 
-#undef HAS_SIGWAIT
-
 #undef HAS_HUGE_PAGES
 
 #undef HUGE_PAGE_SIZE
@@ -311,3 +317,11 @@
 #undef HAS_BSD_GETAFFINITY_NP
 
 #undef HAS_ZSTD
+
+#undef HAVE_MAX_ALIGN_T
+
+/* 3. Language extensions. */
+
+#undef HAVE_LABELS_AS_VALUES
+
+/* Define if the C compiler supports the labels as values extension. */

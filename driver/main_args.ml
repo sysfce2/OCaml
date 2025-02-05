@@ -407,6 +407,15 @@ let mk_ppx f =
   "-ppx", Arg.String f,
   "<command>  Pipe abstract syntax trees through preprocessor <command>"
 
+let mk_keywords f =
+  "-keywords", Arg.String f,
+  "<version+list>  set keywords following the <version+list> spec:\n
+  \                -<version> if present specifies the base set of keywords\n
+  \                  (if absent the current set of keywords is used)
+  \                -<list> is a \"+\"-separated list of keywords to add to\n
+  \                  the base set of keywords.
+  "
+
 let mk_plugin f =
   "-plugin", Arg.String f,
   "<plugin>  (no longer supported)"
@@ -619,6 +628,9 @@ let mk_dtypedtree f =
 let mk_dshape f =
   "-dshape", Arg.Unit f, " (undocumented)"
 
+let mk_dmatchcomp f =
+  "-dmatchcomp", Arg.Unit f, " (undocumented)"
+
 let mk_drawlambda f =
   "-drawlambda", Arg.Unit f, " (undocumented)"
 
@@ -782,6 +794,7 @@ module type Common_options = sig
   val _nocwd : unit -> unit
   val _open : string -> unit
   val _ppx : string -> unit
+  val _keywords: string -> unit
   val _principal : unit -> unit
   val _no_principal : unit -> unit
   val _rectypes : unit -> unit
@@ -818,6 +831,7 @@ module type Core_options = sig
   val _dparsetree : unit -> unit
   val _dtypedtree : unit -> unit
   val _dshape : unit -> unit
+  val _dmatchcomp : unit -> unit
   val _drawlambda : unit -> unit
   val _dlambda : unit -> unit
 
@@ -1053,6 +1067,7 @@ struct
     mk_no_keep_docs F._no_keep_docs;
     mk_keep_locs F._keep_locs;
     mk_no_keep_locs F._no_keep_locs;
+    mk_keywords F._keywords;
     mk_labels F._labels;
     mk_linkall F._linkall;
     mk_make_runtime F._make_runtime;
@@ -1122,6 +1137,7 @@ struct
     mk_dparsetree F._dparsetree;
     mk_dtypedtree F._dtypedtree;
     mk_dshape F._dshape;
+    mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
     mk_dinstr F._dinstr;
@@ -1161,6 +1177,7 @@ struct
     mk_nopervasives F._nopervasives;
     mk_open F._open;
     mk_ppx F._ppx;
+    mk_keywords F._keywords;
     mk_principal F._principal;
     mk_no_principal F._no_principal;
     mk_rectypes F._rectypes;
@@ -1196,6 +1213,7 @@ struct
     mk_dparsetree F._dparsetree;
     mk_dtypedtree F._dtypedtree;
     mk_dshape F._dshape;
+    mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
     mk_dinstr F._dinstr;
@@ -1258,6 +1276,7 @@ struct
     mk_no_keep_docs F._no_keep_docs;
     mk_keep_locs F._keep_locs;
     mk_no_keep_locs F._no_keep_locs;
+    mk_keywords F._keywords;
     mk_labels F._labels;
     mk_linkall F._linkall;
     mk_inline_max_depth F._inline_max_depth;
@@ -1335,6 +1354,7 @@ struct
     mk_dparsetree F._dparsetree;
     mk_dtypedtree F._dtypedtree;
     mk_dshape F._dshape;
+    mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
     mk_drawclambda F._drawclambda;
@@ -1394,6 +1414,7 @@ module Make_opttop_options (F : Opttop_options) = struct
     mk_inline_indirect_cost F._inline_indirect_cost;
     mk_inline_lifting_benefit F._inline_lifting_benefit;
     mk_inline_branch_factor F._inline_branch_factor;
+    mk_keywords F._keywords;
     mk_labels F._labels;
     mk_alias_deps F._alias_deps;
     mk_no_alias_deps F._no_alias_deps;
@@ -1452,6 +1473,7 @@ module Make_opttop_options (F : Opttop_options) = struct
     mk_dparsetree F._dparsetree;
     mk_dtypedtree F._dtypedtree;
     mk_dshape F._dshape;
+    mk_dmatchcomp F._dmatchcomp;
     mk_drawlambda F._drawlambda;
     mk_dlambda F._dlambda;
     mk_drawclambda F._drawclambda;
@@ -1491,6 +1513,7 @@ struct
     mk_intf F._intf;
     mk_intf_suffix F._intf_suffix;
     mk_intf_suffix_2 F._intf_suffix;
+    mk_keywords F._keywords;
     mk_labels F._labels;
     mk_modern F._labels;
     mk_alias_deps F._alias_deps;
@@ -1623,6 +1646,7 @@ module Default = struct
     let _dsource = set dump_source
     let _dtypedtree = set dump_typedtree
     let _dshape = set dump_shape
+    let _dmatchcomp = set dump_matchcomp
     let _dunique_ids = set unique_ids
     let _dno_unique_ids = clear unique_ids
     let _dlocations = set locations
@@ -1631,6 +1655,7 @@ module Default = struct
       Misc.set_or_ignore error_style_reader.parse error_style
     let _nopervasives = set nopervasives
     let _ppx s = Compenv.first_ppx := (s :: (!Compenv.first_ppx))
+    let _keywords s = Clflags.keyword_edition := (Some s)
     let _unsafe = set unsafe
     let _warn_error s =
       Warnings.parse_options true s |> Option.iter Location.(prerr_alert none)
@@ -1884,6 +1909,7 @@ module Default = struct
     let _intf_suffix s = Config.interface_suffix := s
     let _pp s = Clflags.preprocessor := (Some s)
     let _ppx s = Clflags.all_ppx := (s :: (!Clflags.all_ppx))
+    let _keywords s = Clflags.keyword_edition := Some s
     let _thread = set Clflags.use_threads
     let _v () = Compenv.print_version_and_library "documentation generator"
     let _verbose = set Clflags.verbose

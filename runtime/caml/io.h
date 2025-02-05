@@ -63,8 +63,12 @@ struct channel {
 
 enum {
   CHANNEL_FLAG_FROM_SOCKET = 1,  /* For Windows */
-  CHANNEL_FLAG_MANAGED_BY_GC = 4,  /* Free and close using GC finalization */
-  CHANNEL_TEXT_MODE = 8,           /* "Text mode" for Windows and Cygwin */
+  CHANNEL_FLAG_MANAGED_BY_GC = 4,  /* Free and close using GC finalization. */
+  /* Note: For backwards-compatibility, channels without the flag
+     CHANNEL_FLAG_MANAGED_BY_GC can be used inside single-threaded
+     programs without locking. As a consequence, using such a channel
+     from an asynchronous callback can result in deadlocks. */
+  CHANNEL_TEXT_MODE = 8, /* "Text mode" for Windows and Cygwin */
   CHANNEL_FLAG_UNBUFFERED = 16     /* Unbuffered (for output channels only) */
 };
 
@@ -76,9 +80,11 @@ enum {
 
 /* Creating and closing channels from C */
 
-CAMLextern struct channel * caml_open_descriptor_in (int);
-CAMLextern struct channel * caml_open_descriptor_out (int);
 CAMLextern void caml_close_channel (struct channel *);
+CAMLalloc(caml_close_channel, 1) CAMLreturns_nonnull()
+CAMLextern struct channel * caml_open_descriptor_in (int);
+CAMLalloc(caml_close_channel, 1) CAMLreturns_nonnull()
+CAMLextern struct channel * caml_open_descriptor_out (int);
 CAMLextern file_offset caml_channel_size (struct channel *);
 CAMLextern void caml_seek_in (struct channel *, file_offset);
 CAMLextern void caml_seek_out (struct channel *, file_offset);
@@ -96,8 +102,8 @@ CAMLextern void caml_flush (struct channel *);
 CAMLextern void caml_flush_if_unbuffered (struct channel *);
 CAMLextern void caml_putch(struct channel *, int);
 CAMLextern void caml_putword (struct channel *, uint32_t);
-CAMLextern int caml_putblock (struct channel *, char *, intnat);
-CAMLextern void caml_really_putblock (struct channel *, char *, intnat);
+CAMLextern int caml_putblock (struct channel *, const char *, intnat);
+CAMLextern void caml_really_putblock (struct channel *, const char *, intnat);
 
 CAMLextern unsigned char caml_refill (struct channel *);
 CAMLextern unsigned char caml_getch(struct channel *);

@@ -39,6 +39,7 @@ type error =
   | Cannot_open_dll of filepath
   | Camlheader of string * filepath
   | Link_error of Linkdeps.error
+  | Needs_custom_runtime of string
 
 exception Error of error
 
@@ -55,7 +56,7 @@ let lib_ccobjs = ref []
 let lib_ccopts = ref []
 let lib_dllibs = ref []
 
-let add_ccobjs origin l =
+let add_ccobjs obj_name origin l =
   if not !Clflags.no_auto_link then begin
     if
       String.length !Clflags.use_runtime = 0
@@ -67,7 +68,8 @@ let add_ccobjs origin l =
         Misc.replace_substring ~before:"$CAMLORIGIN" ~after:origin
       in
       lib_ccopts := List.map replace_origin l.lib_ccopts @ !lib_ccopts;
-    end;
+    end else if l.lib_custom then
+      raise(Error(Needs_custom_runtime obj_name));
     lib_dllibs := l.lib_dllibs @ !lib_dllibs
   end
 
@@ -108,6 +110,7 @@ let provided compunit =
 
 let linkdeps_unit ldeps ~filename compunit =
   let requires = required compunit in
+  (* [requires] contains pack submodules *)
   let provides = provided compunit in
   let Compunit compunit = compunit.cu_name in
   Linkdeps.add ldeps ~filename ~compunit ~requires ~provides
@@ -139,7 +142,7 @@ let scan_file ldeps obj_name tolink =
       seek_in ic pos_toc;
       let toc = (input_value ic : library) in
       close_in ic;
-      add_ccobjs (Filename.dirname file_name) toc;
+      add_ccobjs obj_name (Filename.dirname file_name) toc;
       let required =
         List.fold_right
           (fun compunit reqd ->
@@ -871,7 +874,7 @@ extern "C" {
 open Format_doc
 module Style = Misc.Style
 
-let report_error ppf = function
+let report_error_doc ppf = function
   | File_not_found name ->
       fprintf ppf "Cannot find file %a"
         Location.Doc.quoted_filename name
@@ -885,7 +888,7 @@ let report_error ppf = function
   | Symbol_error(name, err) ->
       fprintf ppf "Error while linking %a:@ %a"
         Location.Doc.quoted_filename name
-        Symtable.report_error err
+        Symtable.report_error_doc err
   | Inconsistent_import(intf, file1, file2) ->
       fprintf ppf
         "@[<hov>Files %a@ and %a@ \
@@ -906,14 +909,19 @@ let report_error ppf = function
         Style.inline_code header
         Style.inline_code msg
   | Link_error e ->
-      Linkdeps.report_error ~print_filename:Location.Doc.filename ppf e
+      Linkdeps.report_error_doc ~print_filename:Location.Doc.filename ppf e
+  | Needs_custom_runtime obj_name ->
+      fprintf ppf "%s links with C code, so cannot be linked with -use-prims \
+                   or -use-runtime unless -noautolink is specified" obj_name
 
 let () =
   Location.register_error_of_exn
     (function
-      | Error err -> Some (Location.error_of_printer_file report_error err)
+      | Error err -> Some (Location.error_of_printer_file report_error_doc err)
       | _ -> None
     )
+
+let report_error = Format_doc.compat report_error_doc
 
 let reset () =
   lib_ccobjs := [];

@@ -20,7 +20,7 @@
 
 #include "caml/config.h"
 #include <string.h>
-#ifdef HAS_UNISTD
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 #include <assert.h>
@@ -86,15 +86,13 @@ void caml_change_max_stack_size (uintnat new_max_wsize)
 
 struct stack_info** caml_alloc_stack_cache (void)
 {
-  int i;
-
   struct stack_info** stack_cache =
     (struct stack_info**)caml_stat_alloc_noexc(sizeof(struct stack_info*) *
                                                NUM_STACK_SIZE_CLASSES);
   if (stack_cache == NULL)
     return NULL;
 
-  for(i = 0; i < NUM_STACK_SIZE_CLASSES; i++)
+  for (int i = 0; i < NUM_STACK_SIZE_CLASSES; i++)
     stack_cache[i] = NULL;
 
   return stack_cache;
@@ -334,7 +332,7 @@ void caml_maybe_expand_stack (void)
 
 #else /* End NATIVE_CODE, begin BYTE_CODE */
 
-value caml_global_data;
+value caml_global_data = Val_unit;
 
 CAMLprim value caml_alloc_stack(value hval, value hexn, value heff)
 {
@@ -385,14 +383,14 @@ void caml_scan_stack(
   scanning_action f, scanning_action_flags fflags, void* fdata,
   struct stack_info* stack, value* v_gc_regs)
 {
-  value *low, *high, *sp;
+  value *low, *high;
 
   while (stack != NULL) {
     CAMLassert(stack->magic == 42);
 
     high = Stack_high(stack);
     low = stack->sp;
-    for (sp = low; sp < high; sp++) {
+    for (value *sp = low; sp < high; sp++) {
       value v = *sp;
       if (is_scannable(fflags, v)) {
         f(fdata, v, sp);
@@ -447,61 +445,6 @@ void caml_rewrite_exception_stack(struct stack_info *old_stack,
     fiber_debug_log ("exn_ptr is null");
   }
 }
-
-#ifdef WITH_FRAME_POINTERS
-/* Update absolute base pointers for new stack */
-static void rewrite_frame_pointers(struct stack_info *old_stack,
-    struct stack_info *new_stack)
-{
-  struct frame_walker {
-    struct frame_walker *base_addr;
-    uintnat return_addr;
-  } *frame, *next;
-  ptrdiff_t delta;
-  void *top, **p;
-
-  delta = (char*)Stack_high(new_stack) - (char*)Stack_high(old_stack);
-
-  /* Walk the frame-pointers linked list */
-  for (frame = __builtin_frame_address(0); frame; frame = next) {
-
-    top = (char*)&frame->return_addr
-      + 1 * sizeof(value) /* return address */
-      + 2 * sizeof(value) /* trap frame */
-      + 2 * sizeof(value); /* DWARF pointer & gc_regs */
-
-    /* Detect top of the fiber and bail out */
-    /* It also avoid to dereference invalid base pointer at main */
-    if (top == Stack_high(old_stack))
-      break;
-
-    /* Save the base address since it may be adjusted */
-    next = frame->base_addr;
-
-    if (!(Stack_base(old_stack) <= (value*)frame->base_addr
-        && (value*)frame->base_addr < Stack_high(old_stack))) {
-      /* No need to adjust base pointers that don't point into the reallocated
-       * fiber */
-      continue;
-    }
-
-    if (Stack_base(old_stack) <= (value*)&frame->base_addr
-        && (value*)&frame->base_addr < Stack_high(old_stack)) {
-      /* The base pointer itself is located inside the reallocated fiber
-       * and needs to be adjusted on the new fiber */
-      p = (void**)((char*)Stack_high(new_stack) - (char*)Stack_high(old_stack)
-          + (char*)&frame->base_addr);
-      CAMLassert(*p == frame->base_addr);
-      *p += delta;
-    }
-    else {
-      /* Base pointers on other stacks are adjusted in place */
-      frame->base_addr = (struct frame_walker*)((char*)frame->base_addr
-          + delta);
-    }
-  }
-}
-#endif
 #endif
 
 int caml_try_realloc_stack(asize_t required_space)
@@ -545,21 +488,39 @@ int caml_try_realloc_stack(asize_t required_space)
 #ifdef NATIVE_CODE
   caml_rewrite_exception_stack(old_stack, (value**)&Caml_state->exn_handler,
                               new_stack);
-#ifdef WITH_FRAME_POINTERS
-  rewrite_frame_pointers(old_stack, new_stack);
-#endif
 #endif
 
   /* Update stack pointers in Caml_state->c_stack. It is possible to have
    * multiple c_stack_links to point to the same stack since callbacks are run
    * on existing stacks. */
   {
-    struct c_stack_link* link;
-    for (link = Caml_state->c_stack; link; link = link->prev) {
+    for (struct c_stack_link *link = Caml_state->c_stack;
+         link != NULL;
+         link = link->prev) {
       if (link->stack == old_stack) {
+        ptrdiff_t delta =
+          (char*)Stack_high(new_stack) - (char*)Stack_high(old_stack);
+#ifdef WITH_FRAME_POINTERS
+        struct stack_frame {
+          struct stack_frame* prev;
+          void* retaddr;
+        };
+
+        /* Frame pointer is pushed just below the c_stack_link.
+           This is somewhat tricky to guarantee when there are stack
+           arguments to C calls: see caml_c_call_copy_stack_args */
+        struct stack_frame* fp = ((struct stack_frame*)link) - 1;
+        CAMLassert(fp->prev == link->sp);
+
+        /* Rewrite OCaml frame pointers above this C frame */
+        while (Stack_base(old_stack) <= (value*)fp->prev &&
+               (value*)fp->prev < Stack_high(old_stack)) {
+          fp->prev = (struct stack_frame*)((char*)fp->prev + delta);
+          fp = fp->prev;
+        }
+#endif
         link->stack = new_stack;
-        link->sp = (void*)((char*)Stack_high(new_stack) -
-                           ((char*)Stack_high(old_stack) - (char*)link->sp));
+        link->sp = (char*)link->sp + delta;
       }
     }
   }
@@ -622,7 +583,8 @@ CAMLprim value caml_continuation_use_noexc (value cont)
 
   fiber_debug_log("cont: is_block(%d) tag_val(%ul) is_young(%d)",
                   Is_block(cont), Tag_val(cont), Is_young(cont));
-  CAMLassert(Is_block(cont) && Tag_val(cont) == Cont_tag);
+  CAMLassert(Is_block(cont));
+  CAMLassert(Tag_val(cont) == Cont_tag);
 
   /* this forms a barrier between execution and any other domains
      that might be marking this continuation */
@@ -663,7 +625,7 @@ CAMLprim value caml_continuation_use_and_update_handler_noexc
     /* The continuation has already been taken */
     return stack;
   }
-  while (Stack_parent(stk) != NULL) stk = Stack_parent(stk);
+  stk = Ptr_val(Field(cont, 1));
   Stack_handle_value(stk) = hval;
   Stack_handle_exception(stk) = hexn;
   Stack_handle_effect(stk) = heff;

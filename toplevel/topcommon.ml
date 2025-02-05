@@ -34,7 +34,7 @@ let print_warning = Location.print_warning
 let input_name = Location.input_name
 
 let parse_mod_use_file name lb =
-  let modname = Unit_info.modname_from_source name in
+  let modname = Unit_info.lax_modname_from_source name in
   let items =
     List.concat
       (List.map
@@ -208,6 +208,19 @@ let preprocess_phrase ppf phr =
   if !Clflags.dump_parsetree then Printast.top_phrase ppf phr;
   if !Clflags.dump_source then Pprintast.top_phrase ppf phr;
   phr
+
+let typecheck_phrase ppf oldenv sstr =
+  Typecore.reset_delayed_checks ();
+  let (str, sg, sn, shape, newenv) =
+    Typemod.type_toplevel_phrase oldenv sstr
+  in
+  if !Clflags.dump_typedtree then Printtyped.implementation ppf str;
+  let sg' = Typemod.Signature_names.simplify newenv sn sg in
+  Includemod.check_implementation oldenv sg sg';
+  Typecore.force_delayed_checks ();
+  let shape = Shape_reduce.local_reduce Env.empty shape in
+  if !Clflags.dump_shape then Shape.print ppf shape;
+  (str, sg', newenv)
 
 (* Phrase buffer that stores the last toplevel phrase (see
    [Location.input_phrase_buffer]). *)
@@ -406,7 +419,7 @@ let try_run_directive ppf dir_name pdir_arg =
 let loading_hint_printer ppf cu =
   let open Format_doc in
   let global = Symtable.Global.Glob_compunit (Cmo_format.Compunit cu) in
-  Symtable.report_error ppf (Symtable.Undefined_global global);
+  Symtable.report_error_doc ppf (Symtable.Undefined_global global);
   let find_with_ext ext =
     try Some (Load_path.find_normalized (cu ^ ext)) with Not_found -> None
   in

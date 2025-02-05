@@ -51,7 +51,7 @@ let slot_offset env loc cls =
 (* Output a symbol *)
 
 let emit_jump op s =
-  if !Clflags.dlcode || !Clflags.pic_code
+  if !Clflags.dlcode
   then `{emit_string op}	{emit_symbol s}@plt`
   else `{emit_string op}	{emit_symbol s}`
 
@@ -339,7 +339,7 @@ let emit_instr env i =
            at noalloc calls *)
         `	mv	s0, sp\n`;
         cfi_remember_state ();
-        cfi_def_cfa_register ~reg:21;
+        cfi_def_cfa_register ~reg:8;
         let ofs = Domainstate.(idx_of_field Domain_c_stack) * 8 in
         `	ld	sp, {emit_int ofs}({emit_reg reg_domain_state_ptr})\n`;
         `	{emit_call func}\n`;
@@ -717,7 +717,7 @@ let data l =
 (* Beginning / end of an assembly file *)
 
 let begin_assembly() =
-  if !Clflags.dlcode || !Clflags.pic_code then `	.option pic\n`;
+  if !Clflags.dlcode then `	.option pic\n`;
   `	.file \"\"\n`; (* PR#7073 *)
   reset_debug_info ();
   (* Emit the beginning of the segments *)
